@@ -101,7 +101,13 @@ def generate_domain_data(domain_key, river_key="volta", **kwargs):
     in normalised form for training, plus raw arrays for plotting.
     """
     if domain_key == "fluids":
-        x, t, h, u, cfg = solve_saint_venant(river_key, Nx=50, Nt=80)
+        custom_params = {}
+        if "n_manning" in kwargs:
+            custom_params["n_manning"] = kwargs["n_manning"]
+        if "S0" in kwargs:
+            custom_params["S0"] = kwargs["S0"]
+        x, t, h, u, cfg = solve_saint_venant(
+            river_key, Nx=50, Nt=80, custom_params=custom_params if custom_params else None)
         Nt_r, Nx_r = h.shape
         xx, tt = np.meshgrid(x, t)
         return dict(x=x, t=t, h=h, u=u, cfg=cfg,
@@ -141,12 +147,17 @@ def generate_domain_data(domain_key, river_key="volta", **kwargs):
         load_type = kwargs.get("load_type", "uniform")
         EI = kwargs.get("EI", 1.0)
         q0 = kwargs.get("q0", 1.0)
-        x = np.linspace(0, 1, 100)
-        v_true = solve_beam_analytical(x, L=1.0, EI=EI, q0=q0)
-        return dict(x=x, v=v_true, EI=EI, q0=q0, load_type=load_type)
+        L = kwargs.get("L", 1.0)
+        x = np.linspace(0, L, 100)
+        v_true = solve_beam_analytical(x, L=L, EI=EI, q0=q0, load_type=load_type)
+        return dict(x=x, v=v_true, EI=EI, q0=q0, L=L, load_type=load_type)
 
     if domain_key == "dam":
-        dam_data = generate_dam_data(Nt_res=150, Nx=40, Nt_reach=150)
+        gate_width = kwargs.get("gate_width", None)
+        reservoir_area = kwargs.get("reservoir_area", None)
+        dam_data = generate_dam_data(Nt_res=150, Nx=40, Nt_reach=150,
+                                     gate_width=gate_width,
+                                     reservoir_area=reservoir_area)
         return dam_data
 
     if domain_key == "inverse_fluids":

@@ -79,14 +79,23 @@ class ElasticityPDE(PDEModule):
         return "EI * d^4v/dx^4 = q(x)   (Euler-Bernoulli beam bending)"
 
 
-def solve_beam_analytical(x, L=1.0, EI=1.0, q0=1.0):
+def solve_beam_analytical(x, L=1.0, EI=1.0, q0=1.0, load_type="uniform"):
     """
-    Exact solution for a simply-supported beam under uniform load q0.
+    Exact solution for a simply-supported beam.
     Boundary conditions: v(0)=v(L)=0, v''(0)=v''(L)=0 (simple supports,
     zero moment at ends).
 
-    v(x) = q0/(24*EI) * (x^4 - 2*L*x^3 + L^3*x)
-    (standard textbook result for simply supported uniform-load beam)
+    For uniform load: v(x) = q0/(24*EI) * (x^4 - 2*L*x^3 + L^3*x)
+    For central point load P=q0: piecewise classic simply-supported beam deflection.
     """
-    v = q0 / (24 * EI) * (x ** 4 - 2 * L * x ** 3 + L ** 3 * x)
+    if load_type == "uniform":
+        v = q0 / (24 * EI) * (x ** 4 - 2 * L * x ** 3 + L ** 3 * x)
+    else:
+        # Point load at midspan
+        mid = L / 2.0
+        v = np.where(
+            x <= mid,
+            q0 * x * (3 * L ** 2 - 4 * x ** 2) / (48 * EI),
+            q0 * (L - x) * (3 * L ** 2 - 4 * (L - x) ** 2) / (48 * EI)
+        )
     return v
