@@ -1,4 +1,4 @@
-Thank you for contributing to PINN River Modeller.
+Thank you for contributing to PINN Multi-Physics Explorer.
 
 Contribution guidelines:
 

@@ -46,7 +46,7 @@ class ForwardPINN(nn.Module):
         super().__init__()
         self.net = MLP(in_dim=2, out_dim=2, hidden=hidden, depth=depth)
         self.g = g
-        self.S0 = S0  # bed slope — set per river
+        self.S0 = S0  # bed slope — set per domain/preset
 
     def forward(self, xt):
         """xt: (N, 2) tensor of [x, t] pairs, normalised"""

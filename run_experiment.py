@@ -1,10 +1,12 @@
 """
 run_experiment.py — standalone evaluation script.
 
-Runs the full three-tier experiment and saves publication-quality figures
-to results/. Use this for your paper — independent of Streamlit.
+Runs the full three-tier (fluids/dam) experiment and saves publication-quality
+figures to `results/`. This script is fluids-focused (river presets) and is
+kept as a reproducible paper experiment runner; other domains are accessible
+via the Dash UI in `dash_app/`.
 
-Usage:
+Usage examples (fluids-focused examples shown; script accepts domain/config args):
     python run_experiment.py --river volta --epochs 3000
     python run_experiment.py --river amazon --epochs 4000 --module all
     python run_experiment.py --river custom --S0 0.001 --n 0.03 --module forward
@@ -536,7 +538,7 @@ def run_dam_experiment(n_epochs, save=True):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run PINN River experiments")
+    parser = argparse.ArgumentParser(description="Run PINN Multi-Physics experiments")
     parser.add_argument("--river",   default="volta",
                         choices=list(RIVERS.keys()))
     parser.add_argument("--epochs",  type=int, default=3000)
@@ -548,8 +550,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = RIVERS[args.river]
-    print(f"\nPINN River Experiment")
-    print(f"River: {cfg['name']}  |  Epochs: {args.epochs}  |  Module: {args.module}")
+    print(f"\nPINN Multi-Physics Experiment")
+    print(f"Preset: {cfg['name']}  |  Epochs: {args.epochs}  |  Module: {args.module}")
 
     if args.module in ("all", "forward"):
         run_forward(args.river, cfg, args.epochs, args.fraction)
