@@ -16,7 +16,20 @@ python dash_app/app.py
 # Open http://localhost:8050
 ```
 
-3) Run tests
+3) Run command-line experiments
+
+```bash
+python run_experiment.py --domain fluids --river volta --module all --epochs 3000
+python run_experiment.py --domain heat --epochs 2000
+python run_experiment.py --domain wave --epochs 2500
+python run_experiment.py --domain gravity --epochs 3000
+python run_experiment.py --domain elasticity --epochs 2000
+```
+
+For `fluids`, `--module` selects the workflow; other domains currently
+run a single domain-specific experiment.
+
+4) Run tests
 
 ```bash
 pytest -q

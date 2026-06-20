@@ -50,6 +50,23 @@ multi-domain capability:
 - `tests/` — pytest smoke tests for the data generator and the PINN engine
 	(heat and wave small training runs).
 
+### Standalone experiment runner
+
+The CLI runner can execute fluids/dam experiments and the newer physics
+modules directly from the command line:
+
+```bash
+python run_experiment.py --domain fluids --river volta --module all --epochs 3000
+python run_experiment.py --domain dam --epochs 3000
+python run_experiment.py --domain heat --epochs 2000
+python run_experiment.py --domain wave --epochs 2500
+python run_experiment.py --domain gravity --epochs 3000
+python run_experiment.py --domain elasticity --epochs 2000
+```
+
+For the `fluids` domain, use `--module` to choose between `all`,
+`forward`, `sparsity`, `inverse`, `dam`, and `uncertainty`.
+
 Run them locally as described in `RUNNING.md`.
 
 ## Governing equations
