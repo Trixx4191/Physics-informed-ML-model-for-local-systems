@@ -87,6 +87,20 @@ main_panel = html.Div([
 ])
 
 app.layout = dbc.Container([
+    dbc.Row(
+        dbc.Col(
+            dbc.Card([
+                dbc.CardBody([
+                    html.H2("PINN Multi-Physics Explorer", className="mb-1"),
+                    html.P(
+                        "Interactive Dash dashboard for training and visualising PINN models across multiple physics domains.",
+                        className="text-muted mb-0"
+                    ),
+                ])
+            ], className="shadow-sm mb-3"),
+            width=12
+        )
+    ),
     dbc.Row([
         dbc.Col(sidebar, width=3, className="py-3"),
         dbc.Col(main_panel, width=9, className="py-3"),
@@ -161,8 +175,9 @@ def render_domain_params(domain_key):
 def show_equation(domain_key):
     info = DOMAIN_INFO[domain_key]
     return dbc.Alert([
-        html.Strong(info["label"]), html.Br(),
-        html.Code(info["equation"], className="small"),
+        html.Div([html.Strong(info["label"])], className="mb-2"),
+        html.Code(info["equation"], className="small mb-2 d-block"),
+        html.P(info.get("description", ""), className="small mb-0 text-muted"),
     ], color="light", className="border")
 
 
