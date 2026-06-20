@@ -1,4 +1,4 @@
-Thank you for contributing to PINN River Modeller.
+Thank you for contributing to PINN Multi-Physics Explorer.
 
 Key guidelines to make this project admissions-grade:
 

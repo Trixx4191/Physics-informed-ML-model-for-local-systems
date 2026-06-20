@@ -39,7 +39,7 @@ SURFACE_COLORSCALE = "Viridis"
 
 DOMAIN_INFO = {
     "fluids": {
-        "label": "Fluids — river flow (Saint-Venant)",
+        "label": "Fluids — open-channel flow (Saint-Venant)",
         "equation": "dh/dt + d(uh)/dx = 0,   d(uh)/dt + d(u2h+0.5gh2)/dx + gh(Sf-S0)=0",
         "field_dims": 2,   # (x, t) grid -> surface
         "outputs": ["h", "u"],
@@ -603,7 +603,7 @@ def make_dam_reach_surface(x_r, t_r, h_r):
 
 def make_n_field_fig(x_km, n_field, true_n):
     """Inferred Manning's roughness field -- 2D is correct here too, n(x)
-    is a single curve along the river, not a 2-variable field."""
+    is a single curve (trajectory), not a 2-variable field."""
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=x_km, y=n_field, mode="lines",
                              name="Inferred n(x)", line=dict(color="#7B2D8B", width=3),

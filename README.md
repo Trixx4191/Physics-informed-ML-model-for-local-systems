@@ -1,7 +1,8 @@
-# PINN River Modeller
+# PINN Multi-Physics Explorer
 
-Physics-Informed Neural Networks for 1D river hydrodynamics.
-Penn-level research project — three-tier contribution.
+Physics-Informed Neural Networks across multiple 1D domains (fluids, heat,
+waves, elasticity, gravity, dam/reservoir). Penn-level research project —
+multi-concept framework for PINNs.
 
 ## Three modules
 
@@ -21,13 +22,13 @@ pip install -r requirements.txt
 python dash_app/app.py
 ```
 
-## River presets
-Volta (Ghana) · Amazon (Brazil) · Rhine (Germany) · Generic dam · Custom
+## Domain presets
+Example presets (fluids/dam): Volta (Ghana) · Amazon (Brazil) · Rhine (Germany) · Generic dam · Custom
 
 ## Project structure
 
 ```
-pinn_river/
+pinn_multiphysics/
 ├── models/
 │   └── pinn_core.py          # ForwardPINN, InversePINN, DamPINN
 ├── data/
@@ -38,6 +39,18 @@ pinn_river/
 │   └── app.py                # Web UI (Dash)
 └── requirements.txt
 ```
+
+## Examples & tests
+
+There are quick reproducible examples and tests included to validate the
+multi-domain capability:
+
+- `examples/reproduce_heat.py` — small heat PINN training that saves a
+	checkpoint and a figure in `results/`.
+- `tests/` — pytest smoke tests for the data generator and the PINN engine
+	(heat and wave small training runs).
+
+Run them locally as described in `RUNNING.md`.
 
 ## Governing equations
 

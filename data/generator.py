@@ -1,14 +1,14 @@
 """
 Synthetic data generator.
 Numerically solves the 1D Saint-Venant equations using a Lax-Friedrichs scheme
-to produce ground-truth h(x,t) and u(x,t) for any river configuration.
+to produce ground-truth h(x,t) and u(x,t) for fluid presets (river examples).
 This data is then sampled sparsely to simulate real sensor networks.
 """
 
 import numpy as np
 
 
-# ── River presets ─────────────────────────────────────────────────────────────
+# ── Fluid (river) presets ───────────────────────────────────────────────────
 RIVERS = {
     "volta": {
         "name": "Volta River (Ghana)",
