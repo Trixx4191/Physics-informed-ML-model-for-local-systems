@@ -216,13 +216,18 @@ def generate_sparse_observations(x, t, h, u, fraction=0.1, noise_std=0.02,
     return train, full, stats
 
 
-def generate_dam_data(T=86400, Nt_res=300, Nx=100, Nt_reach=300):
+def generate_dam_data(T=86400, Nt_res=300, Nx=100, Nt_reach=300,
+                      gate_width=None, reservoir_area=None):
     """
     Generate synthetic dam data:
     - Reservoir level Z(t) from mass balance with variable inflow
     - Downstream reach h(x,t), u(x,t) driven by gate outflow
     """
-    cfg = RIVERS["dam"]
+    cfg = RIVERS["dam"].copy()
+    if gate_width is not None:
+        cfg["gate_width"] = gate_width
+    if reservoir_area is not None:
+        cfg["reservoir_area"] = reservoir_area
     g = 9.81
     A = cfg["reservoir_area"]
     Cd = cfg["Cd"]
