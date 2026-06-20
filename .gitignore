@@ -17,3 +17,4 @@ dash_app/__pycache__/
 
 # Ignore Jupyter checkpoints
 .ipynb_checkpoints/
+node_modules/
