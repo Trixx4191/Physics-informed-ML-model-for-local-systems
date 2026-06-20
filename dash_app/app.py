@@ -56,6 +56,15 @@ sidebar = dbc.Card([
         dcc.Store(id="param-mode-store", data=1),
         dcc.Store(id="param-e-store", data=0.3),
         dcc.Store(id="param-load-store", data="uniform"),
+        dcc.Store(id="param-n-store", data=0.035),
+        dcc.Store(id="param-s0-store", data=0.0008),
+        dcc.Store(id="param-GM-store", data=1.0),
+        dcc.Store(id="param-EI-store", data=1.0),
+        dcc.Store(id="param-L-store", data=1.0),
+        dcc.Store(id="param-q0-store", data=1.0),
+        dcc.Store(id="param-gate-width-store", data=10.0),
+        dcc.Store(id="param-res-area-store", data=1000000.0),
+        dcc.Store(id="param-true-n-store", data=0.035),
 
         html.Hr(),
         html.Label("Training data fraction (%)", className="fw-bold small"),
@@ -120,6 +129,12 @@ def render_domain_params(domain_key):
             html.Label("River", className="fw-bold small mt-2"),
             dcc.Dropdown(id="param-river", options=river_options,
                         value="volta", clearable=False),
+            html.Label("Manning n", className="fw-bold small mt-3"),
+            dcc.Slider(id="param-n", min=0.01, max=0.06, step=0.005, value=0.035,
+                       marks={0.01: "0.01", 0.03: "0.03", 0.06: "0.06"}),
+            html.Label("Bed slope S0", className="fw-bold small mt-3"),
+            dcc.Slider(id="param-s0", min=0.0001, max=0.002, step=0.0001, value=0.0008,
+                       marks={0.0001: "1e-4", 0.0008: "8e-4", 0.002: "2e-3"}),
         ])
     if domain_key == "heat":
         return html.Div([
@@ -141,6 +156,9 @@ def render_domain_params(domain_key):
             html.Label("Orbital eccentricity", className="fw-bold small mt-2"),
             dcc.Slider(id="param-e", min=0.0, max=0.8, step=0.05, value=0.3,
                       marks={0: "circular", 0.4: "0.4", 0.8: "0.8"}),
+            html.Label("Central mass parameter GM", className="fw-bold small mt-3"),
+            dcc.Slider(id="param-GM", min=0.1, max=5.0, step=0.1, value=1.0,
+                      marks={0.1: "0.1", 1.0: "1.0", 5.0: "5.0"}),
         ])
     if domain_key == "elasticity":
         return html.Div([
@@ -149,12 +167,26 @@ def render_domain_params(domain_key):
                 {"label": "Uniform load", "value": "uniform"},
                 {"label": "Point load (midspan)", "value": "point"},
             ], value="uniform", clearable=False),
+            html.Label("Flexural rigidity EI", className="fw-bold small mt-3"),
+            dcc.Slider(id="param-EI", min=0.1, max=5.0, step=0.1, value=1.0,
+                       marks={0.1: "0.1", 1.0: "1.0", 5.0: "5.0"}),
+            html.Label("Beam length L", className="fw-bold small mt-3"),
+            dcc.Slider(id="param-L", min=0.5, max=3.0, step=0.1, value=1.0,
+                       marks={0.5: "0.5", 1.0: "1.0", 3.0: "3.0"}),
+            html.Label("Load amplitude q0", className="fw-bold small mt-3"),
+            dcc.Slider(id="param-q0", min=0.2, max=5.0, step=0.2, value=1.0,
+                       marks={0.2: "0.2", 1.0: "1.0", 5.0: "5.0"}),
         ])
     if domain_key == "dam":
         return html.Div([
-            html.P("Coupled reservoir mass-balance ODE + downstream "
-                  "Saint-Venant reach. No extra params — uses the "
-                  "generic dam preset.", className="text-muted small mt-2"),
+            html.Label("Gate width", className="fw-bold small mt-2"),
+            dcc.Slider(id="param-gate-width", min=2.0, max=30.0, step=1.0, value=10.0,
+                       marks={2: "2", 10: "10", 30: "30"}),
+            html.Label("Reservoir area", className="fw-bold small mt-3"),
+            dcc.Slider(id="param-res-area", min=1e5, max=5e6, step=1e5, value=1e6,
+                       marks={1e5: "1e5", 1e6: "1e6", 5e6: "5e6"}),
+            html.P("Adjust gate geometry and reservoir storage for better operational realism.",
+                   className="text-muted small mt-2"),
         ])
     if domain_key == "inverse_fluids":
         river_options = [{"label": v["name"], "value": k}
@@ -164,9 +196,11 @@ def render_domain_params(domain_key):
                       className="fw-bold small mt-2"),
             dcc.Dropdown(id="param-river", options=river_options,
                         value="volta", clearable=False),
-            html.P("The PINN never sees this value — it infers n(x) "
-                  "purely from sparse h,u observations and the physics "
-                  "residual.", className="text-muted small mt-2"),
+            html.Label("True Manning n", className="fw-bold small mt-3"),
+            dcc.Slider(id="param-true-n", min=0.01, max=0.06, step=0.005, value=0.035,
+                       marks={0.01: "0.01", 0.03: "0.03", 0.06: "0.06"}),
+            html.P("The PINN infers n(x) from sparse observations and the physics residual.",
+                   className="text-muted small mt-2"),
         ])
     return html.Div()
 
@@ -197,15 +231,28 @@ def show_equation(domain_key):
     State("param-mode-store", "data"),
     State("param-e-store", "data"),
     State("param-load-store", "data"),
+    State("param-n-store", "data"),
+    State("param-s0-store", "data"),
+    State("param-GM-store", "data"),
+    State("param-EI-store", "data"),
+    State("param-L-store", "data"),
+    State("param-q0-store", "data"),
+    State("param-gate-width-store", "data"),
+    State("param-res-area-store", "data"),
+    State("param-true-n-store", "data"),
     prevent_initial_call=True,
 )
 def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
-                 river_key, alpha_val, c_val, mode_val, e_val, load_val):
+                 river_key, alpha_val, c_val, mode_val, e_val, load_val,
+                 n_val, s0_val, GM_val, EI_val, L_val, q0_val,
+                 gate_width_val, res_area_val, true_n_val):
     fraction = fraction_pct / 100.0
 
     try:
         if domain_key == "fluids":
-            data = generate_domain_data("fluids", river_key=river_key or "volta")
+            data = generate_domain_data(
+                "fluids", river_key=river_key or "volta",
+                n_manning=n_val, S0=s0_val)
             model, hist, stats, extra = train_domain(
                 "fluids", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
 
@@ -275,7 +322,7 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
             return content, f"Wave equation trained — {epochs} epochs"
 
         if domain_key == "gravity":
-            data = generate_domain_data("gravity", eccentricity=e_val or 0.3, GM=1.0)
+            data = generate_domain_data("gravity", eccentricity=e_val or 0.3, GM=GM_val or 1.0)
             model, hist, stats, extra = train_domain(
                 "gravity", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
 
@@ -288,7 +335,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
                 metric_row([("R² (x)", f"{extra['r2x']:.4f}"),
                            ("R² (y)", f"{extra['r2y']:.4f}"),
                            ("Training pts", extra["n_train"]),
-                           ("Eccentricity", data["e"])]),
+                           ("Eccentricity", data["e"]),
+                           ("GM", f"{data['GM']:.2f}")]),
                 dcc.Graph(figure=fig_orbit),
                 html.H6("Training loss", className="mt-3"),
                 dcc.Graph(figure=make_loss_curve_fig(hist)),
@@ -296,7 +344,9 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
             return content, f"Orbit reconstructed from {fraction_pct}% of trajectory"
 
         if domain_key == "elasticity":
-            data = generate_domain_data("elasticity", load_type=load_val or "uniform", EI=1.0, q0=1.0)
+            data = generate_domain_data(
+                "elasticity", load_type=load_val or "uniform",
+                EI=EI_val or 1.0, q0=q0_val or 1.0, L=L_val or 1.0)
             model, hist, stats, extra = train_domain(
                 "elasticity", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
 
@@ -307,7 +357,10 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
             content = html.Div([
                 metric_row([("R²", f"{extra['r2']:.4f}"),
                            ("Training pts", extra["n_train"]),
-                           ("Load type", data["load_type"])]),
+                           ("Load type", data["load_type"]),
+                           ("EI", f"{data['EI']:.2f}"),
+                           ("Beam L", f"{data['L']:.1f}"),
+                           ("q0", f"{data['q0']:.2f}")]),
                 dcc.Graph(figure=fig_beam),
                 html.H6("Training loss", className="mt-3"),
                 dcc.Graph(figure=make_loss_curve_fig(hist)),
@@ -315,7 +368,9 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
             return content, f"Beam deflection trained — {epochs} epochs"
 
         if domain_key == "dam":
-            data = generate_domain_data("dam")
+            data = generate_domain_data(
+                "dam", gate_width=gate_width_val or 10.0,
+                reservoir_area=res_area_val or 1e6)
             model, hist, stats, extra = train_domain(
                 "dam", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
 
@@ -341,7 +396,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
             return content, f"Dam system trained — {epochs} epochs"
 
         if domain_key == "inverse_fluids":
-            data = generate_domain_data("inverse_fluids", river_key=river_key or "volta")
+            data = generate_domain_data("inverse_fluids", river_key=river_key or "volta",
+                                        true_n=true_n_val or 0.035)
             model, hist, stats, extra = train_domain(
                 "inverse_fluids", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
 
@@ -432,4 +488,58 @@ def sync_e(v):
 @app.callback(Output("param-load-store", "data"),
               Input("param-load", "value"), prevent_initial_call=True)
 def sync_load(v):
+    return v
+
+
+@app.callback(Output("param-n-store", "data"),
+              Input("param-n", "value"), prevent_initial_call=True)
+def sync_n(v):
+    return v
+
+
+@app.callback(Output("param-s0-store", "data"),
+              Input("param-s0", "value"), prevent_initial_call=True)
+def sync_s0(v):
+    return v
+
+
+@app.callback(Output("param-GM-store", "data"),
+              Input("param-GM", "value"), prevent_initial_call=True)
+def sync_GM(v):
+    return v
+
+
+@app.callback(Output("param-EI-store", "data"),
+              Input("param-EI", "value"), prevent_initial_call=True)
+def sync_EI(v):
+    return v
+
+
+@app.callback(Output("param-L-store", "data"),
+              Input("param-L", "value"), prevent_initial_call=True)
+def sync_L(v):
+    return v
+
+
+@app.callback(Output("param-q0-store", "data"),
+              Input("param-q0", "value"), prevent_initial_call=True)
+def sync_q0(v):
+    return v
+
+
+@app.callback(Output("param-gate-width-store", "data"),
+              Input("param-gate-width", "value"), prevent_initial_call=True)
+def sync_gate_width(v):
+    return v
+
+
+@app.callback(Output("param-res-area-store", "data"),
+              Input("param-res-area", "value"), prevent_initial_call=True)
+def sync_res_area(v):
+    return v
+
+
+@app.callback(Output("param-true-n-store", "data"),
+              Input("param-true-n", "value"), prevent_initial_call=True)
+def sync_true_n(v):
     return v
