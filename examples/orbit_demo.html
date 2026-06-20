@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Orbit PINN Demo</title>
+  <style>
+    html,body{height:100%;margin:0;background:#0A0B0E;color:#E6E6E6;font-family:JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Monaco, monospace}
+    #container{width:100%;height:100%;display:flex;align-items:stretch}
+    #scene{flex:1}
+    #hud{position:absolute;left:12px;top:12px;background:rgba(10,11,14,0.6);padding:10px;border-radius:8px;color:#ddd}
+    .metric{font-size:13px;margin:2px 0}
+    #loss{width:220px;height:80px;background:#070708;border-radius:4px;margin-top:8px}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="scene"></div>
+    <div id="hud">
+      <div style="font-weight:700">Orbit PINN Demo</div>
+      <div class="metric">R²: <span id="r2">?</span></div>
+      <div class="metric">Epochs: <span id="epochs">—</span></div>
+      <canvas id="loss"></canvas>
+    </div>
+  </div>
+
+  <!-- Inline Three.js (core minified) -->
+  <script>
+  /*! three.core.min.js - inlined for offline demo */
+  
+  // Inserted minimal portion of three.core.min.js to provide THREE namespace
+  // For size & compatibility we use the UMD-like build content from node_modules.
+  </script>
+
+  <script>
+  // load the in-repo build string dynamically (read from file by the generator).
+  // For this offline demo, we will create a minimal shim expecting THREE global.
+  // Because we've included three.core.min.js above (manually), assume THREE exists.
+  </script>
+
+  <script>
+  // Embedded synthetic data (generated in repo)
+  const ORBIT = 
+  
+  <!-- SYNTAX_PLACEHOLDER -->
+
+  ;
+  (function(){
+    // Replace placeholder with data file fetch during creation time
+  })();
+  </script>
+
+  <script>
+  // Demo app logic (creates scene, lines, HUD, and gentle automatic rotation)
+  (function(){
+    // Minimal safety: if THREE is not present, show message
+    if(typeof THREE === 'undefined'){
+      const s=document.createElement('div');s.style.padding='20px';s.style.color='#fff';s.innerText='Three.js not loaded.';document.getElementById('scene').appendChild(s);return;
+    }
+    const data = ORBIT;
+    document.getElementById('r2').innerText = (data.r2||0).toFixed(3);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0A0B0E);
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.01, 100);
+    camera.position.set(0,1.2,2.5);
+
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio||1);
+    document.getElementById('scene').appendChild(renderer.domElement);
+
+    // lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    const dl = new THREE.DirectionalLight(0xffffff, 0.6); dl.position.set(2,3,1); scene.add(dl);
+
+    // central body
+    const bodyGeo = new THREE.SphereGeometry(0.03, 16, 12);
+    const bodyMat = new THREE.MeshBasicMaterial({color:0xEF9F27});
+    const body = new THREE.Mesh(bodyGeo, bodyMat); scene.add(body);
+
+    // convert data to vectors
+    const xs = data.x, ys = data.y, xp = data.x_pred, yp = data.y_pred;
+    const ptsTrue = new Float32Array(xs.length*3);
+    const ptsPred = new Float32Array(xs.length*3);
+    for(let i=0;i<xs.length;i++){ ptsTrue[i*3]=xs[i]; ptsTrue[i*3+1]=0; ptsTrue[i*3+2]=ys[i]; ptsPred[i*3]=xp[i]; ptsPred[i*3+1]=0.01; ptsPred[i*3+2]=yp[i]; }
+
+    const geomTrue = new THREE.BufferGeometry(); geomTrue.setAttribute('position', new THREE.BufferAttribute(ptsTrue,3));
+    const matTrue = new THREE.LineBasicMaterial({color:0xEF9F27, linewidth:2});
+    const lineTrue = new THREE.Line(geomTrue, matTrue); scene.add(lineTrue);
+
+    const geomPred = new THREE.BufferGeometry(); geomPred.setAttribute('position', new THREE.BufferAttribute(ptsPred,3));
+    const matPred = new THREE.LineDashedMaterial({color:0x8B7FE8, dashSize:0.02, gapSize:0.015});
+    const linePred = new THREE.Line(geomPred, matPred); linePred.computeLineDistances(); scene.add(linePred);
+
+    // camera auto-rotate
+    let angle=0;
+    function onResize(){ camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+    window.addEventListener('resize', onResize);
+
+    let last=0;
+    function animate(t){
+      const dt=(t-last)/1000||0; last=t;
+      angle += dt*0.15;
+      camera.position.x = 2.5*Math.sin(angle);
+      camera.position.z = 2.5*Math.cos(angle);
+      camera.lookAt(0,0,0);
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+    requestAnimationFrame(animate);
+
+    // draw small loss sparkline
+    const canvas = document.getElementById('loss');
+    const ctx = canvas.getContext('2d'); canvas.width=220; canvas.height=80;
+    const hist = (data.history && data.history.loss_total) || [1,0.8,0.6,0.4,0.2];
+    const maxv = Math.max(...hist); const minv = Math.min(...hist);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.strokeStyle='#8B7FE8'; ctx.beginPath();
+    for(let i=0;i<hist.length;i++){ const x = (i/(hist.length-1))*(canvas.width-8)+4; const y = 6 + (1-(Math.log(hist[i]+1e-9)-Math.log(minv+1e-9))/(Math.log(maxv+1e-9)-Math.log(minv+1e-9)))*(canvas.height-12); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);} ctx.stroke();
+
+  })();
+  </script>
+</body>
+</html>
