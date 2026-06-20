@@ -24,8 +24,13 @@ import torch
 
 from data.generator import (RIVERS, solve_saint_venant,
                               generate_sparse_observations, generate_dam_data)
+from core.pde_module import PINNEngine, sample_collocation, train_pinn
+from domains.heat import HeatPDE, solve_heat_analytical
+from domains.wave import WavePDE, solve_wave_analytical
+from domains.gravity import GravityPDE, generate_orbit_data
+from domains.elasticity import ElasticityPDE, solve_beam_analytical
 from experiments.trainer import (train_forward, train_inverse, train_dam,
-                                  to_tensor, sample_collocation)
+                                  to_tensor, sample_collocation as sample_collocation_2d)
 from models.uncertainty import train_mc_dropout
 from sklearn.metrics import r2_score
 
@@ -533,6 +538,194 @@ def run_dam_experiment(n_epochs, save=True):
     return model, history, Z_pred, r2_z
 
 
+def run_heat_experiment(n_epochs, save=True):
+    print(f"\n{'='*60}")
+    print("MODULE: Heat diffusion")
+    print(f"  epochs={n_epochs}")
+    print(f"{'='*60}")
+
+    x = np.linspace(0, 1, 60)
+    t = np.linspace(0, 2, 60)
+    T_field = solve_heat_analytical(x, t, alpha=0.05, L=1.0, T0=100.0)
+    xx, tt = np.meshgrid(x, t)
+    coords = np.stack([xx.ravel(), tt.ravel()], axis=1).astype(np.float32)
+    targets = T_field.ravel().astype(np.float32)
+
+    x_mean, x_std = coords[:, 0].mean(), coords[:, 0].std()
+    t_mean, t_std = coords[:, 1].mean(), coords[:, 1].std()
+    xt = np.stack([((coords[:, 0] - x_mean) / (x_std + 1e-8)),
+                   ((coords[:, 1] - t_mean) / (t_std + 1e-8))], axis=1).astype(np.float32)
+
+    y_mean, y_std = targets.mean(), targets.std()
+    y = ((targets - y_mean) / (y_std + 1e-8)).astype(np.float32).reshape(-1, 1)
+
+    data_coords = torch.tensor(xt, dtype=torch.float32)
+    data_targets = torch.tensor(y, dtype=torch.float32)
+
+    model = PINNEngine(HeatPDE(alpha=0.05), hidden=64, depth=3)
+    model, history = train_pinn(model, data_coords, data_targets,
+                                n_epochs=n_epochs, lr=1e-3,
+                                lambda_data=1.0, lambda_pde=0.1,
+                                n_colloc=1500)
+
+    if save:
+        torch.save(model.state_dict(), "results/checkpoints/heat.pth")
+
+    model.eval()
+    with torch.no_grad():
+        pred = model(data_coords).numpy().reshape(len(t), len(x))
+    pred_un = pred * y_std + y_mean
+
+    mse = np.mean((pred_un - T_field)**2)
+    print(f"  MSE = {mse:.4f}")
+
+    if save:
+        fig, ax = plt.subplots(figsize=(6, 4.5))
+        im = ax.imshow(pred_un, origin='lower', aspect='auto',
+                       extent=[x.min(), x.max(), t.min(), t.max()], cmap='viridis')
+        ax.set_xlabel('x'); ax.set_ylabel('t'); ax.set_title('Heat PINN prediction')
+        fig.colorbar(im, ax=ax)
+        path = 'results/figures/heat_prediction.png'
+        fig.savefig(path, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  Saved → {path}")
+
+    return model, history
+
+
+def run_wave_experiment(n_epochs, save=True):
+    print(f"\n{'='*60}")
+    print("MODULE: Wave propagation")
+    print(f"  epochs={n_epochs}")
+    print(f"{'='*60}")
+
+    x = np.linspace(0, 1, 60)
+    t = np.linspace(0, 2, 60)
+    U_field = solve_wave_analytical(x, t, c=1.0, L=1.0, mode=1, amplitude=1.0)
+    xx, tt = np.meshgrid(x, t)
+    coords = np.stack([xx.ravel(), tt.ravel()], axis=1).astype(np.float32)
+    targets = U_field.ravel().astype(np.float32)
+
+    x_mean, x_std = coords[:, 0].mean(), coords[:, 0].std()
+    t_mean, t_std = coords[:, 1].mean(), coords[:, 1].std()
+    xt = np.stack([((coords[:, 0] - x_mean) / (x_std + 1e-8)),
+                   ((coords[:, 1] - t_mean) / (t_std + 1e-8))], axis=1).astype(np.float32)
+
+    y_mean, y_std = targets.mean(), targets.std()
+    y = ((targets - y_mean) / (y_std + 1e-8)).astype(np.float32).reshape(-1, 1)
+
+    data_coords = torch.tensor(xt, dtype=torch.float32)
+    data_targets = torch.tensor(y, dtype=torch.float32)
+
+    model = PINNEngine(WavePDE(c=1.0), hidden=64, depth=3)
+    model, history = train_pinn(model, data_coords, data_targets,
+                                n_epochs=n_epochs, lr=1e-3,
+                                lambda_data=1.0, lambda_pde=0.1,
+                                n_colloc=1500)
+
+    if save:
+        torch.save(model.state_dict(), "results/checkpoints/wave.pth")
+
+    if save:
+        fig, ax = plt.subplots(figsize=(6, 4.5))
+        im = ax.imshow(U_field, origin='lower', aspect='auto',
+                       extent=[x.min(), x.max(), t.min(), t.max()], cmap='viridis')
+        ax.set_xlabel('x'); ax.set_ylabel('t'); ax.set_title('Wave analytical solution')
+        fig.colorbar(im, ax=ax)
+        fig.savefig('results/figures/wave_true.png', bbox_inches='tight')
+        plt.close(fig)
+        print("  Saved → results/figures/wave_true.png")
+
+    return model, history
+
+
+def run_gravity_experiment(n_epochs, save=True):
+    print(f"\n{'='*60}")
+    print("MODULE: Gravity orbital mechanics")
+    print(f"  epochs={n_epochs}")
+    print(f"{'='*60}")
+
+    t, x, y, T_period = generate_orbit_data(GM=1.0, a=1.0, e=0.3, n_points=200)
+    coords = np.stack([t], axis=1).astype(np.float32)
+    targets = np.stack([x, y], axis=1).astype(np.float32)
+
+    t_mean, t_std = coords[:, 0].mean(), coords[:, 0].std()
+    xt = ((coords[:, 0] - t_mean) / (t_std + 1e-8)).reshape(-1, 1).astype(np.float32)
+
+    y_mean = targets.mean(axis=0)
+    y_std = targets.std(axis=0)
+    y = ((targets - y_mean) / (y_std + 1e-8)).astype(np.float32)
+
+    data_coords = torch.tensor(xt, dtype=torch.float32)
+    data_targets = torch.tensor(y, dtype=torch.float32)
+
+    model = PINNEngine(GravityPDE(GM=1.0), hidden=64, depth=3)
+    model, history = train_pinn(model, data_coords, data_targets,
+                                n_epochs=n_epochs, lr=1e-3,
+                                lambda_data=1.0, lambda_pde=0.1,
+                                n_colloc=1500)
+
+    if save:
+        torch.save(model.state_dict(), "results/checkpoints/gravity.pth")
+
+    if save:
+        fig, ax = plt.subplots(figsize=(6, 6))
+        x_pred, y_pred = model(data_coords).detach().numpy().T
+        x_pred = x_pred * y_std[0] + y_mean[0]
+        y_pred = y_pred * y_std[1] + y_mean[1]
+        ax.plot(x, y, 'k--', label='True orbit')
+        ax.plot(x_pred, y_pred, 'r', alpha=0.6, label='PINN orbit')
+        ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_title('Orbit comparison')
+        ax.legend()
+        fig.savefig('results/figures/gravity_orbit.png', bbox_inches='tight')
+        plt.close(fig)
+        print("  Saved → results/figures/gravity_orbit.png")
+
+    return model, history
+
+
+def run_elasticity_experiment(n_epochs, save=True):
+    print(f"\n{'='*60}")
+    print("MODULE: Elasticity beam bending")
+    print(f"  epochs={n_epochs}")
+    print(f"{'='*60}")
+
+    x = np.linspace(0, 1, 100)
+    v_true = solve_beam_analytical(x, L=1.0, EI=1.0, q0=1.0)
+    coords = x.reshape(-1, 1).astype(np.float32)
+
+    x_mean, x_std = coords.mean(), coords.std()
+    xt = ((coords - x_mean) / (x_std + 1e-8)).astype(np.float32)
+
+    y_mean, y_std = v_true.mean(), v_true.std()
+    y = ((v_true - y_mean) / (y_std + 1e-8)).astype(np.float32).reshape(-1, 1)
+
+    data_coords = torch.tensor(xt, dtype=torch.float32)
+    data_targets = torch.tensor(y, dtype=torch.float32)
+
+    model = PINNEngine(ElasticityPDE(EI=1.0, q0=1.0, load_type='uniform'), hidden=64, depth=3)
+    model, history = train_pinn(model, data_coords, data_targets,
+                                n_epochs=n_epochs, lr=1e-3,
+                                lambda_data=1.0, lambda_pde=0.1,
+                                n_colloc=1500)
+
+    if save:
+        torch.save(model.state_dict(), "results/checkpoints/elasticity.pth")
+
+    if save:
+        v_pred = model(data_coords).detach().numpy().ravel() * y_std + y_mean
+        fig, ax = plt.subplots(figsize=(6, 4.5))
+        ax.plot(x, v_true, 'k-', label='True deflection')
+        ax.plot(x, v_pred, 'r--', label='PINN deflection')
+        ax.set_xlabel('x'); ax.set_ylabel('v(x)'); ax.set_title('Beam deflection')
+        ax.legend()
+        fig.savefig('results/figures/elasticity_deflection.png', bbox_inches='tight')
+        plt.close(fig)
+        print("  Saved → results/figures/elasticity_deflection.png")
+
+    return model, history
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -541,6 +734,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run PINN Multi-Physics experiments")
     parser.add_argument("--river",   default="volta",
                         choices=list(RIVERS.keys()))
+    parser.add_argument("--domain",  default="fluids",
+                        choices=["fluids", "dam", "heat", "wave", "gravity", "elasticity"])
     parser.add_argument("--epochs",  type=int, default=3000)
     parser.add_argument("--module",  default="all",
                         choices=["all", "forward", "sparsity",
@@ -551,23 +746,28 @@ if __name__ == "__main__":
 
     cfg = RIVERS[args.river]
     print(f"\nPINN Multi-Physics Experiment")
-    print(f"Preset: {cfg['name']}  |  Epochs: {args.epochs}  |  Module: {args.module}")
+    print(f"Preset: {cfg['name']}  |  Domain: {args.domain}  |  Epochs: {args.epochs}  |  Module: {args.module}")
 
-    if args.module in ("all", "forward"):
-        run_forward(args.river, cfg, args.epochs, args.fraction)
-
-    if args.module in ("all", "sparsity"):
-        run_sparsity_sweep(args.river, cfg, n_epochs_sweep=min(args.epochs, 2000),
-                           seeds=args.seeds)
-
-    if args.module in ("all", "inverse"):
-        run_inverse(args.river, cfg, args.epochs, data_fraction=args.fraction)
-
-    if args.module in ("all", "dam"):
+    if args.domain == "fluids":
+        if args.module in ("all", "forward"):
+            run_forward(args.river, cfg, args.epochs, args.fraction)
+        if args.module in ("all", "sparsity"):
+            run_sparsity_sweep(args.river, cfg, n_epochs_sweep=min(args.epochs, 2000),
+                               seeds=args.seeds)
+        if args.module in ("all", "inverse"):
+            run_inverse(args.river, cfg, args.epochs, data_fraction=args.fraction)
+        if args.module in ("all", "uncertainty"):
+            run_uncertainty(args.river, cfg, args.epochs, args.fraction)
+    elif args.domain == "dam":
         run_dam_experiment(args.epochs)
-
-    if args.module in ("all", "uncertainty"):
-        run_uncertainty(args.river, cfg, args.epochs, args.fraction)
+    elif args.domain == "heat":
+        run_heat_experiment(args.epochs)
+    elif args.domain == "wave":
+        run_wave_experiment(args.epochs)
+    elif args.domain == "gravity":
+        run_gravity_experiment(args.epochs)
+    elif args.domain == "elasticity":
+        run_elasticity_experiment(args.epochs)
 
     print(f"\nAll figures saved to results/figures/")
     print(f"Checkpoints saved to results/checkpoints/")

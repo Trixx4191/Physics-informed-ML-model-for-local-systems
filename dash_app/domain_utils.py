@@ -41,42 +41,49 @@ DOMAIN_INFO = {
     "fluids": {
         "label": "Fluids — open-channel flow (Saint-Venant)",
         "equation": "dh/dt + d(uh)/dx = 0,   d(uh)/dt + d(u2h+0.5gh2)/dx + gh(Sf-S0)=0",
+        "description": "Train a PINN for water depth and velocity in a 1D open channel using sparse sensor observations.",
         "field_dims": 2,   # (x, t) grid -> surface
         "outputs": ["h", "u"],
     },
     "heat": {
         "label": "Heat diffusion",
         "equation": "dT/dt = alpha * d2T/dx2",
+        "description": "Model temperature diffusion in a rod with thermal diffusivity alpha.",
         "field_dims": 2,
         "outputs": ["T"],
     },
     "wave": {
         "label": "Wave propagation",
         "equation": "d2u/dt2 = c2 * d2u/dx2",
+        "description": "Learn the wave field for a vibrating string under specified wave speed and mode.",
         "field_dims": 2,
         "outputs": ["u"],
     },
     "gravity": {
         "label": "Gravity — orbital mechanics",
         "equation": "d2x/dt2 = -GM x / r3,   d2y/dt2 = -GM y / r3",
+        "description": "Reconstruct a 2D orbit from sparse trajectory samples around a central mass.",
         "field_dims": 1,   # trajectory, not a field
         "outputs": ["x", "y"],
     },
     "elasticity": {
         "label": "Elasticity — beam bending",
         "equation": "EI * d4v/dx4 = q(x)",
+        "description": "Estimate beam deflection under a distributed load using a fourth-order PDE model.",
         "field_dims": 1,   # 1D curve, not a 2D field
         "outputs": ["v"],
     },
     "dam": {
         "label": "Dam & reservoir (coupled ODE + PDE)",
         "equation": "A*dZ/dt = Q_in(t) - Q_out(Z),   plus Saint-Venant in the downstream reach",
+        "description": "Simulate reservoir level dynamics with coupled downstream reach flow in a dam system.",
         "field_dims": 1,   # reservoir level over time; reach gets its own 3D surface
         "outputs": ["Z", "h", "u"],
     },
     "inverse_fluids": {
         "label": "Fluids — infer roughness (inverse)",
         "equation": "Saint-Venant, with n(x) LEARNED rather than supplied",
+        "description": "Infer spatially-varying Manning roughness from sparse flow observations and physics constraints.",
         "field_dims": 2,
         "outputs": ["h", "u", "n(x)"],
     },
