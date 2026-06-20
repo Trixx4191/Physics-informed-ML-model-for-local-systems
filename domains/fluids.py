@@ -1,8 +1,9 @@
 """
 Fluids domain — 1D Saint-Venant equations as a PDEModule.
 
-This is your original river PINN, migrated into the general framework.
-Nothing about the physics changes — only how it's wired into the engine.
+This module implements the fluids PINN (Saint-Venant) within the general
+multi-domain framework. Nothing about the physics changes — only how it's
+wired into the engine.
 
 Two variants:
   FluidsPDE         — forward problem, n_manning supplied as a constant
