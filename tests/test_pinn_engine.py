@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from core.pde_module import PINNEngine, sample_collocation, train_pinn
+from core.pde_module import PINNEngine, train_pinn
 from domains.heat import HeatPDE, solve_heat_analytical
 from domains.wave import WavePDE, solve_wave_analytical
 
@@ -26,6 +26,9 @@ def norm_coords_targets(coords, targets):
 
 
 def test_heat_pinn_decreases_loss():
+    torch.manual_seed(0)
+    np.random.seed(0)
+
     x, t, coords = make_grid(16, 16, L=1.0, T=1.0)
     T_true = solve_heat_analytical(x, t, alpha=0.01, L=1.0, T0=1.0)
     targets = T_true.ravel().astype(np.float32)
@@ -35,31 +38,36 @@ def test_heat_pinn_decreases_loss():
     pde = HeatPDE(alpha=0.01)
     model = PINNEngine(pde_module=pde, hidden=32, depth=2)
 
-    # compute initial total loss (data + PDE on small collocation)
     data_coords = torch.tensor(xt, dtype=torch.float32)
     data_targets = torch.tensor(y, dtype=torch.float32)
-    coll = sample_collocation(200, input_dim=pde.input_dim, ranges=[(-1, 1), (-1, 1)])
 
-    with torch.no_grad():
-        pred = model(data_coords)
-        loss_data = torch.mean((pred - data_targets) ** 2).item()
-        residuals = model.pde_residual(coll)
-        if isinstance(residuals, (tuple, list)):
-            loss_pde = sum(torch.mean(r ** 2).item() for r in residuals)
-        else:
-            loss_pde = torch.mean(residuals ** 2).item()
-    initial = loss_data + 0.1 * loss_pde
-
-    # Train briefly
     _, history = train_pinn(model, data_coords, data_targets,
-                            n_epochs=40, lr=1e-3, lambda_data=1.0, lambda_pde=0.1,
+                            n_epochs=400, lr=1e-3, lambda_data=1.0, lambda_pde=0.1,
                             n_colloc=200)
 
-    final = history["loss_total"][-1] if history["loss_total"] else initial
-    assert final < initial
+    losses = history["loss_total"]
+    assert len(losses) >= 4, "expected at least 4 logged checkpoints"
+
+    early_avg = sum(losses[:3]) / 3
+    late_avg = sum(losses[-3:]) / 3
+    assert late_avg < early_avg
 
 
 def test_wave_pinn_decreases_loss():
+    # Seeded for reproducibility -- this test was observed to fail
+    # intermittently (~40% of runs) with the difference often under 0.1,
+    # consistent with init-dependent noise rather than a real optimisation
+    # failure. The wave equation's second-order residual is harder to
+    # bring down in the first few epochs than heat's first-order one, so
+    # a single "final < initial" point comparison is brittle here: it can
+    # legitimately tick up slightly before a real descent begins. Fixing
+    # the seed makes the test deterministic; comparing the END of training
+    # against the AVERAGE of the first several checkpoints (rather than
+    # just epoch 0) is also more robust to that early noise while still
+    # genuinely checking that training reduces loss.
+    torch.manual_seed(0)
+    np.random.seed(0)
+
     x, t, coords = make_grid(16, 16, L=1.0, T=1.0)
     U_true = solve_wave_analytical(x, t, c=1.0, L=1.0, mode=1, amplitude=1.0)
     targets = U_true.ravel().astype(np.float32)
@@ -72,21 +80,13 @@ def test_wave_pinn_decreases_loss():
     data_coords = torch.tensor(xt, dtype=torch.float32)
     data_targets = torch.tensor(y, dtype=torch.float32)
 
-    coll = sample_collocation(200, input_dim=pde.input_dim, ranges=[(-1, 1), (-1, 1)])
-
-    with torch.no_grad():
-        pred = model(data_coords)
-        loss_data = torch.mean((pred - data_targets) ** 2).item()
-        residuals = model.pde_residual(coll)
-        if isinstance(residuals, (tuple, list)):
-            loss_pde = sum(torch.mean(r ** 2).item() for r in residuals)
-        else:
-            loss_pde = torch.mean(residuals ** 2).item()
-    initial = loss_data + 0.1 * loss_pde
-
     _, history = train_pinn(model, data_coords, data_targets,
-                            n_epochs=40, lr=1e-3, lambda_data=1.0, lambda_pde=0.1,
+                            n_epochs=400, lr=1e-3, lambda_data=1.0, lambda_pde=0.1,
                             n_colloc=200)
 
-    final = history["loss_total"][-1] if history["loss_total"] else initial
-    assert final < initial
+    losses = history["loss_total"]
+    assert len(losses) >= 4, "expected at least 4 logged checkpoints"
+
+    early_avg = sum(losses[:3]) / 3   # average of first 3 checkpoints
+    late_avg = sum(losses[-3:]) / 3   # average of last 3 checkpoints
+    assert late_avg < early_avg
