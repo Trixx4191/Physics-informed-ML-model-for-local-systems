@@ -1,8 +1,11 @@
 """Small reproducible example: train a tiny Heat PINN, save checkpoint and figure."""
 import os
+import sys
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.pde_module import PINNEngine, train_pinn
 from domains.heat import HeatPDE, solve_heat_analytical
