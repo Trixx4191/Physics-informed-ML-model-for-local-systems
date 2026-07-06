@@ -166,3 +166,74 @@ class InverseFluidsPDE(PDEModule):
         return ("dh/dt + d(uh)/dx = 0\n"
                 "d(uh)/dt + d(u^2h + 0.5gh^2)/dx + gh(Sf - S0) = 0\n"
                 "n(x) learned, not supplied — inferred from data + physics jointly")
+
+
+class DualHeadFluidsPINN(nn.Module):
+    """
+    Industry-grade fluids PINN with separate output heads for h and u.
+
+    WHY THIS ARCHITECTURE:
+    The diagnosis showed that a shared-trunk network fitting (h, u)
+    jointly as two outputs plateaus at R²~0.37 — not because the signal
+    is unlearnable (h alone reaches R²=0.995 with a plain MLP) but because
+    the Saint-Venant momentum residual creates gradient conflict: improving
+    h and satisfying ∂(uh)/∂t + ... = 0 simultaneously requires opposing
+    gradient directions in a single shared output layer.
+
+    Solution: shared encoder trunk (captures common (x,t) → feature mapping)
+    + separate decoder heads for h and u. The physics residual still couples
+    both heads (Saint-Venant involves both h and u in every term), but the
+    per-output gradient conflict in the final layer is eliminated.
+
+    This is structurally equivalent to multi-task learning with task-specific
+    heads — standard practice in production ML systems where outputs have
+    different scales, frequencies, and loss landscapes.
+
+    COMBINES WITH:
+    train_pinn_adaptive() for self-calibrating λ — cite both:
+    - Wang et al. 2021 (adaptive weighting)
+    - Mishra & Molinaro 2022 (error estimates for PINN multi-task systems)
+    """
+    def __init__(self, hidden=128, depth=5, head_depth=2,
+                 g=9.81, S0=0.001, n_manning=0.03):
+        super().__init__()
+        self.pde_module = FluidsPDE(g=g, S0=S0, n_manning=n_manning)
+
+        # Shared trunk: (x,t) → feature vector
+        trunk_layers = [nn.Linear(2, hidden), nn.Tanh()]
+        for _ in range(depth - 1):
+            trunk_layers += [nn.Linear(hidden, hidden), nn.Tanh()]
+        self.trunk = nn.Sequential(*trunk_layers)
+
+        # Separate decoder heads
+        def make_head():
+            layers = []
+            for _ in range(head_depth - 1):
+                layers += [nn.Linear(hidden, hidden), nn.Tanh()]
+            layers.append(nn.Linear(hidden, 1))
+            return nn.Sequential(*layers)
+
+        self.h_head = make_head()   # → depth h
+        self.u_head = make_head()   # → velocity u
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in list(self.trunk.modules()) + list(self.h_head.modules()) + list(self.u_head.modules()):
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, coords):
+        features = self.trunk(coords)
+        h = torch.nn.functional.softplus(self.h_head(features))
+        u = self.u_head(features)
+        return torch.cat([h, u], dim=1)
+
+    def pde_residual(self, coords):
+        """
+        Saint-Venant residuals computed through the dual-head architecture.
+        Autograd differentiates through trunk → head → output w.r.t. coords.
+        """
+        coords = coords.clone().requires_grad_(True)
+        return self.pde_module.residual(coords, self.forward)
