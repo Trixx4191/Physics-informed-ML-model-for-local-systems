@@ -90,3 +90,81 @@ def test_wave_pinn_decreases_loss():
     early_avg = sum(losses[:3]) / 3   # average of first 3 checkpoints
     late_avg = sum(losses[-3:]) / 3   # average of last 3 checkpoints
     assert late_avg < early_avg
+
+
+def test_mc_dropout_produces_nonzero_uncertainty():
+    """
+    MCDropoutEngine with dropout active at inference should produce
+    non-zero standard deviations across Monte Carlo samples.
+    If std is zero everywhere the dropout is being incorrectly disabled
+    at inference time (model.eval() when it should be model.train()).
+    """
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+    x, t, coords = make_grid(12, 12, L=1.0, T=1.0)
+    T_true = solve_heat_analytical(x, t, alpha=0.01, L=1.0, T0=1.0)
+    targets = T_true.ravel().astype(np.float32)
+    xt, y = norm_coords_targets(coords, targets)
+
+    from experiments.sparsity_and_uncertainty import MCDropoutEngine, train_mc_dropout
+    from domains.heat import HeatPDE
+
+    pde = HeatPDE(alpha=0.01)
+    data_coords = torch.tensor(xt, dtype=torch.float32)
+    data_targets = torch.tensor(y, dtype=torch.float32)
+
+    model, _ = train_mc_dropout(pde, data_coords, data_targets,
+                                 n_epochs=200, lr=1e-3, lambda_pde=0.05,
+                                 n_colloc=100, dropout_p=0.10)
+
+    means, stds = model.predict_with_uncertainty(data_coords, n_samples=30)
+
+    assert means.shape == (len(xt), 1)
+    assert stds.shape  == (len(xt), 1)
+    # Dropout at inference must produce nonzero variance
+    assert stds.mean() > 1e-6, (
+        "MC Dropout stds are zero — model.eval() may be incorrectly "
+        "disabling dropout at inference. Must use model.train()."
+    )
+
+
+def test_sparsity_sweep_pinn_vs_mlp():
+    """
+    run_sparsity_sweep should return results for each requested fraction
+    and the R2 values should be in a physically plausible range [-inf, 1].
+    We test on the heat equation (fastest to converge) with 2 fractions
+    and 1 seed to keep the test fast.
+    """
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+    x, t, coords = make_grid(16, 16, L=1.0, T=1.0)
+    T_true = solve_heat_analytical(x, t, alpha=0.01, L=1.0, T0=1.0)
+    targets = T_true.ravel().astype(np.float32)
+    xt, y = norm_coords_targets(coords, targets)
+
+    from experiments.sparsity_and_uncertainty import run_sparsity_sweep
+    from domains.heat import HeatPDE
+
+    pde = HeatPDE(alpha=0.01)
+    all_coords  = torch.tensor(xt, dtype=torch.float32)
+    all_targets = torch.tensor(y,  dtype=torch.float32)
+    full_y_true = all_targets[:, 0].numpy()
+
+    fractions = [0.10, 1.00]
+    results = run_sparsity_sweep(
+        pde, all_coords, all_targets,
+        all_coords, full_y_true,
+        fractions=fractions,
+        n_epochs=300, n_seeds=1,
+        output_idx=0,
+    )
+
+    assert results["fractions"] == fractions
+    assert len(results["pinn_r2"]) == len(fractions)
+    assert len(results["mlp_r2"])  == len(fractions)
+
+    for r in results["pinn_r2"] + results["mlp_r2"]:
+        assert r <= 1.01, f"R2={r} exceeds 1 — likely a normalisation bug"
+        assert r > -5.0, f"R2={r} implausibly low — likely a shape mismatch"

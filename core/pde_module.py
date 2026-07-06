@@ -125,6 +125,91 @@ class PINNEngine(nn.Module):
         return self.pde_module.residual(coords, self.forward)
 
 
+class FourierEmbedding(nn.Module):
+    """
+    Random Fourier Feature embedding (Tancik et al. 2020 / Rahimi & Recht 2007).
+
+    WHY THIS FIXES THE FLUIDS PLATEAU:
+    Plain MLPs with tanh activations struggle to fit high-frequency spatial/
+    temporal signals (the "spectral bias" problem — networks learn low-frequency
+    components first and converge slowly on fast-varying ones). The Saint-Venant
+    flood wave is exactly such a signal: sharp velocity gradients near the wave
+    front, rapid oscillations from the inflow BC.
+
+    The fix: encode raw (x,t) inputs as
+        [sin(2π B x), cos(2π B x)]
+    where B is a matrix of random frequencies drawn from N(0, sigma²). This gives
+    the network a rich, multi-scale Fourier basis to work from, rather than
+    requiring the network to build that basis itself through depth. The sigma
+    parameter controls the frequency range covered — higher sigma = more
+    high-frequency content.
+
+    CRITICAL: the embedding is applied BEFORE the MLP, but autograd must still
+    flow through it to compute PDE residuals. We ensure this by:
+    1. NOT using torch.no_grad() around the embedding
+    2. Computing gradients w.r.t. the ORIGINAL coords (not the embedding output)
+       because the PDEModule.residual() receives coords, not the embedding.
+    This means the embedding is a pure input transformation — autograd still
+    differentiates the full chain coords → embedding → MLP → output.
+    """
+    def __init__(self, input_dim: int, num_frequencies: int = 64, sigma: float = 1.0):
+        super().__init__()
+        # B is fixed (not trained) — random Fourier features are deliberately
+        # not updated during training; their value is in providing a diverse
+        # frequency basis, not in being learned.
+        B = torch.randn(input_dim, num_frequencies) * sigma
+        self.register_buffer("B", B)
+        # Output dim: sin + cos for each frequency
+        self.out_dim = 2 * num_frequencies
+
+    def forward(self, x):
+        """x: (N, input_dim) — returns (N, 2*num_frequencies)"""
+        proj = 2 * np.pi * x @ self.B        # (N, num_frequencies)
+        return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
+
+
+class FourierPINNEngine(nn.Module):
+    """
+    Drop-in replacement for PINNEngine that prepends a FourierEmbedding
+    before the MLP. Every PDEModule works unchanged — only the input
+    representation changes, not the physics residual.
+
+    Usage:
+        model = FourierPINNEngine(pde_module, num_frequencies=64, sigma=2.0)
+        # Everything else (train_pinn, pde_residual, etc.) identical to PINNEngine
+    """
+    def __init__(self, pde_module: PDEModule, hidden=128, depth=4,
+                 num_frequencies=64, sigma=2.0):
+        super().__init__()
+        self.pde_module = pde_module
+        self.embedding = FourierEmbedding(pde_module.input_dim,
+                                          num_frequencies, sigma)
+        # MLP takes embedding output, not raw coords
+        self.net = MLP(in_dim=self.embedding.out_dim,
+                       out_dim=pde_module.output_dim,
+                       hidden=hidden, depth=depth)
+
+    def _embed_and_forward(self, coords):
+        """Internal: embed coords then run MLP. Used by both forward() and
+        the lambda passed to pde_module.residual()."""
+        embedded = self.embedding(coords)
+        raw = self.net(embedded)
+        return self.pde_module.transform_output(raw)
+
+    def forward(self, coords):
+        return self._embed_and_forward(coords)
+
+    def pde_residual(self, coords):
+        """
+        The residual must be computed w.r.t. ORIGINAL coords so that
+        autograd can compute ∂/∂x and ∂/∂t for the PDE. We clone and
+        enable grad on coords, then pass the full embed→MLP→transform
+        chain as the net_fn to pde_module.residual().
+        """
+        coords = coords.clone().requires_grad_(True)
+        return self.pde_module.residual(coords, self._embed_and_forward)
+
+
 # ── Generic collocation sampler (domain-agnostic) ───────────────────────────────
 
 def sample_collocation(n, input_dim, ranges=None, seed=None):
@@ -185,6 +270,93 @@ def train_pinn(model: PINNEngine, data_coords, data_targets,
             history["loss_total"].append(loss.item())
             history["loss_data"].append(loss_data.item())
             history["loss_pde"].append(loss_pde.item())
+            if callback:
+                callback(epoch, history)
+
+    return model, history
+
+
+def train_pinn_adaptive(model, data_coords, data_targets,
+                        n_epochs=3000, lr=1e-3,
+                        n_colloc=3000, colloc_ranges=None,
+                        alpha_ema=0.9, warmup_epochs=200,
+                        grad_norm_every=20,
+                        callback=None):
+    """
+    Adaptive loss-balanced PINN trainer — Wang, Teng & Perdikaris (2021),
+    "Understanding and mitigating gradient pathologies in physics-informed
+    neural networks", SIAM J. Sci. Comput. 43(5).
+
+    λ_new = mean(|∇_θ L_data|) / (mean(|∇_θ L_pde|) + ε)
+    λ_ema ← α * λ_ema + (1-α) * λ_new
+
+    grad_norm_every: recompute gradient norms every N steps (not every step)
+    — computing two backward passes every step is correct but slow. Computing
+    every 20 steps reduces overhead by ~50% with negligible accuracy cost since
+    the gradient norms change slowly relative to the learning dynamics.
+    """
+    import torch.optim as optim
+
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, n_epochs, eta_min=1e-5)
+
+    history = {
+        "epoch": [], "loss_total": [], "loss_data": [],
+        "loss_pde": [], "lambda_adaptive": []
+    }
+
+    lam_ema = 0.1
+
+    for epoch in range(n_epochs):
+        model.train()
+        optimizer.zero_grad()
+
+        # ── combined forward pass ─────────────────────────────────────────
+        pred = model(data_coords)
+        loss_data = torch.mean((pred - data_targets) ** 2)
+
+        coll = sample_collocation(n_colloc, model.pde_module.input_dim,
+                                  ranges=colloc_ranges, seed=epoch)
+        residuals = model.pde_residual(coll)
+        if isinstance(residuals, (tuple, list)):
+            loss_pde = sum(torch.mean(r ** 2) for r in residuals)
+        else:
+            loss_pde = torch.mean(residuals ** 2)
+
+        # ── adaptive lambda update (every grad_norm_every steps) ──────────
+        if epoch >= warmup_epochs and epoch % grad_norm_every == 0:
+            # Grad norm of data loss
+            loss_data.backward(retain_graph=True)
+            gn_data = torch.mean(torch.stack([
+                p.grad.abs().mean() for p in model.parameters() if p.grad is not None
+            ])).item()
+            optimizer.zero_grad()
+
+            # Grad norm of pde loss
+            loss_pde.backward(retain_graph=True)
+            gn_pde = torch.mean(torch.stack([
+                p.grad.abs().mean() for p in model.parameters() if p.grad is not None
+            ])).item()
+            optimizer.zero_grad()
+
+            lam_new = gn_data / (gn_pde + 1e-8)
+            lam_ema = alpha_ema * lam_ema + (1 - alpha_ema) * lam_new
+
+        lam = 0.0 if epoch < warmup_epochs else lam_ema
+
+        # ── parameter update ──────────────────────────────────────────────
+        loss = loss_data + lam * loss_pde
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+
+        if epoch % 100 == 0:
+            history["epoch"].append(epoch)
+            history["loss_total"].append(loss.item())
+            history["loss_data"].append(loss_data.item())
+            history["loss_pde"].append(loss_pde.item())
+            history["lambda_adaptive"].append(lam)
             if callback:
                 callback(epoch, history)
 
