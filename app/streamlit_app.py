@@ -80,7 +80,7 @@ with st.sidebar:
 
     st.divider()
     st.caption("Built with PyTorch · Saint-Venant PDEs")
-    st.caption("Penn-level research project")
+    st.caption("Physics-informed neural networks")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

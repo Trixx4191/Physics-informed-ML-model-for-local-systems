@@ -1,20 +1,13 @@
 venv/
+.venv/
 __pycache__/
+*.pyc
 .pytest_cache/
 .vscode/
 .idea/
 .DS_Store
-*.pyc
-results/
-models/__pycache__/
-data/__pycache__/
-experiments/__pycache__/
-app/__pycache__/
-dash_app/__pycache__/
 *.egg-info/
 .env
-/.venv
-
-# Ignore Jupyter checkpoints
 .ipynb_checkpoints/
 node_modules/
+results/checkpoints/

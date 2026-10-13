@@ -1,73 +1,49 @@
 # PINN Multi-Physics Explorer
 
-Physics-Informed Neural Networks across multiple 1D domains (fluids, heat,
-waves, elasticity, gravity, dam/reservoir). Penn-level research project —
-multi-concept framework for PINNs.
+A modular framework for **physics-informed neural networks (PINNs)** that recovers physical fields from sparse sensor data. One shared training engine handles several different PDE systems: open-channel river flow (Saint-Venant), heat diffusion, wave propagation, orbital mechanics, and beam bending. Includes a dam/reservoir model, uncertainty estimates, and an interactive web app.
 
-## Three modules
+Built solo as an independent project; the paper was reviewed by a mentor.
 
-| Module | What it does | Physics |
-|--------|-------------|---------|
-| **Forward prediction** | Predict h(x,t) and u(x,t) from sparse sensor data | 1D Saint-Venant PDEs |
-| **Dam & reservoir** | Model reservoir level Z(t) + downstream reach | Mass-balance ODE + Saint-Venant |
-| **Inverse: infer roughness** | Back-calculate Manning's n(x) from flow observations | Saint-Venant + spatial regularisation |
+**[Live demo](https://huggingface.co/spaces/trixx4191/pinn-explorer)** · **[Paper (PDF)](paper/pinn_multiphysics_paper.pdf)** · **[3D orbit demo](https://trixx4191.github.io/Physics-informed-ML-model-for-local-systems/threejs_orbit/orbit_scene.html)**
 
-## Quick start
+![Overview](results/figures/overview.png)
+
+## Results
+
+| Domain | Result |
+|---|---|
+| Orbital mechanics | Reconstructs a full elliptical orbit from 18% of the trajectory (R² = 0.87 on x) |
+| Beam elasticity | Recovers the full deflection curve from 15% of sensors (R² = 0.9998) |
+| Heat, wave | Verified against closed-form analytical solutions |
+| Saint-Venant (rivers) | Works for depth; the stiff momentum equation remains hard (see Limitations) |
+
+A sparsity benchmark compares each PINN with a same-size plain MLP at 5% to 100% of the data, so the physics prior is measured rather than assumed.
+
+## Limitations
+
+The coupled Saint-Venant momentum equation does not train as well as the other domains. The paper traces this to conflicting gradients between loss terms rather than to a lack of data, and discusses it openly.
+
+## What's inside
+
+- `core/` shared PINN engine, adaptive loss balancing (Wang et al., 2021)
+- `domains/` fluids, dam, heat, wave, gravity, elasticity
+- `models/` network architectures, Monte Carlo Dropout uncertainty
+- `data/` Lax-Friedrichs Saint-Venant solver and sparse sampler
+- `dash_app/` interactive web app
+- `threejs_orbit/` standalone 3D orbit visualisation
+- `paper/` full write-up
+- `tests/` pytest suite, run in CI
+
+## Run it
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Launch the web app
-python dash_app/app.py
-```
-
-## Domain presets
-Example presets (fluids/dam): Volta (Ghana) · Amazon (Brazil) · Rhine (Germany) · Generic dam · Custom
-
-## Project structure
-
-```
-pinn_multiphysics/
-├── models/
-│   └── pinn_core.py          # ForwardPINN, InversePINN, DamPINN
-├── data/
-│   └── generator.py          # Lax-Friedrichs Saint-Venant solver + sparse sampler
-├── experiments/
-│   └── trainer.py            # Training loops for all three modules
-├── dash_app/
-│   └── app.py                # Web UI (Dash)
-└── requirements.txt
-```
-
-## Examples & tests
-
-There are quick reproducible examples and tests included to validate the
-multi-domain capability:
-
-- `examples/reproduce_heat.py` — small heat PINN training that saves a
-	checkpoint and a figure in `results/`.
-- `tests/` — pytest smoke tests for the data generator and the PINN engine
-	(heat and wave small training runs).
-
-### Standalone experiment runner
-
-The CLI runner can execute fluids/dam experiments and the newer physics
-modules directly from the command line:
-
-```bash
-python run_experiment.py --domain fluids --river volta --module all --epochs 3000
-python run_experiment.py --domain dam --epochs 3000
+python dash_app/app.py          # http://localhost:8050
 python run_experiment.py --domain heat --epochs 2000
-python run_experiment.py --domain wave --epochs 2500
-python run_experiment.py --domain gravity --epochs 3000
-python run_experiment.py --domain elasticity --epochs 2000
+pytest -q
 ```
 
-For the `fluids` domain, use `--module` to choose between `all`,
-`forward`, `sparsity`, `inverse`, `dam`, and `uncertainty`.
-
-Run them locally as described in `RUNNING.md`.
+More options in [RUNNING.md](RUNNING.md). Domains: `fluids`, `dam`, `heat`, `wave`, `gravity`, `elasticity`.
 
 ## Governing equations
 
@@ -88,11 +64,6 @@ Q_out = Cd · W · √g · Z^1.5   (broad-crested weir)
 ```
 L = λ₁·MSE(data) + λ₂·MSE(PDE residuals at collocation points)
 ```
-
-## Key result
-The sparsity benchmark module produces the central figure:
-PINN vs vanilla MLP R² as a function of training data fraction (5%→100%).
-The crossover point — where PINN outperforms — is the main scientific contribution.
 
 ## References
 - Raissi, M., Perdikaris, P., Lagaris, G.E. (2019). Physics-informed neural networks. *Journal of Computational Physics*, 378, 686–707.
