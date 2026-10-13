@@ -27,11 +27,11 @@ from experiments.sparsity_and_uncertainty import (
     MCDropoutEngine, train_mc_dropout, run_sparsity_sweep
 )
 from data.generator import RIVERS, generate_sparse_observations
-from data.generator import RIVERS
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
                suppress_callback_exceptions=True)
 app.title = "PINN Multi-Physics Explorer"
+server = app.server  # exposed for gunicorn / Hugging Face Spaces
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
@@ -512,7 +512,8 @@ def metric_row(pairs):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8050)
+    port = int(os.environ.get("PORT", 8050))
+    app.run(debug=os.environ.get("DASH_DEBUG") == "1", host="0.0.0.0", port=port)
 
 
 # ── Sync dynamic per-domain controls into hidden stores ─────────────────────────
