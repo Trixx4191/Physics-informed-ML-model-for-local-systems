@@ -33,6 +33,9 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
 app.title = "PINN Multi-Physics Explorer"
 server = app.server  # exposed for gunicorn / Hugging Face Spaces
 
+@server.route("/healthz")
+def healthz():
+    return "ok"
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
