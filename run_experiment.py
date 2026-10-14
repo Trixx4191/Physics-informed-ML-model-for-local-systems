@@ -737,7 +737,7 @@ if __name__ == "__main__":
     parser.add_argument("--domain",  default="fluids",
                         choices=["fluids", "dam", "heat", "wave", "gravity", "elasticity"])
     parser.add_argument("--epochs",  type=int, default=3000)
-    parser.add_argument("--module",  default="all",
+    parser.add_argument("--module",  default="forward",
                         choices=["all", "forward", "sparsity",
                                  "inverse", "dam", "uncertainty"])
     parser.add_argument("--fraction", type=float, default=0.10)
@@ -747,6 +747,8 @@ if __name__ == "__main__":
     cfg = RIVERS[args.river]
     print(f"\nPINN Multi-Physics Experiment")
     print(f"Preset: {cfg['name']}  |  Domain: {args.domain}  |  Epochs: {args.epochs}  |  Module: {args.module}")
+    if args.module == "all":
+        print("WARNING: --module all executes the full fluid benchmark suite and can take substantially longer than a single training run.")
 
     if args.domain == "fluids":
         if args.module in ("all", "forward"):

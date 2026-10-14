@@ -73,12 +73,11 @@ class ForwardPINN(nn.Module):
         q = u * h  # discharge per unit width
         dq = torch.autograd.grad(q.sum(), xt, create_graph=True)[0]
         dq_dx = dq[:, 0:1]   # ∂(uh)/∂x
+        dq_dt = dq[:, 1:2]  # ∂(uh)/∂t (reused from the same gradient pass)
 
         res_cont = dh_dt + dq_dx
 
         # ---- momentum: ∂(uh)/∂t + ∂(u²h + g·h²/2)/∂x + g·h·(S_f - S_0) = 0 ----
-        dq_dt = torch.autograd.grad(q.sum(), xt, create_graph=True)[0][:, 1:2]
-
         momentum_flux = u * q + 0.5 * self.g * h ** 2
         dmf = torch.autograd.grad(momentum_flux.sum(), xt, create_graph=True)[0]
         dmf_dx = dmf[:, 0:1]
@@ -129,9 +128,9 @@ class InversePINN(nn.Module):
         q = u * h
         dq = torch.autograd.grad(q.sum(), xt, create_graph=True)[0]
         dq_dx = dq[:, 0:1]
+        dq_dt = dq[:, 1:2]
         res_cont = dh_dt + dq_dx
 
-        dq_dt = torch.autograd.grad(q.sum(), xt, create_graph=True)[0][:, 1:2]
         momentum_flux = u * q + 0.5 * self.g * h ** 2
         dmf = torch.autograd.grad(momentum_flux.sum(), xt, create_graph=True)[0]
         dmf_dx = dmf[:, 0:1]
@@ -202,9 +201,9 @@ class DamPINN(nn.Module):
         q = u * h
         dq = torch.autograd.grad(q.sum(), xt, create_graph=True)[0]
         dq_dx = dq[:, 0:1]
+        dq_dt = dq[:, 1:2]
         res_cont = dh_dt + dq_dx
 
-        dq_dt = torch.autograd.grad(q.sum(), xt, create_graph=True)[0][:, 1:2]
         mf = u * q + 0.5 * self.g * h ** 2
         dmf_dx = torch.autograd.grad(mf.sum(), xt, create_graph=True)[0][:, 0:1]
         S_f = (n_manning ** 2) * u * torch.abs(u) / (h ** (4.0 / 3.0) + 1e-8)
