@@ -32,6 +32,7 @@ from data.generator import RIVERS, generate_sparse_observations
 background_cache = diskcache.Cache(
     os.environ.get("DASH_CACHE_DIR", "/tmp/pinn-dash-cache")
 )
+DASH_COLLOCATION_POINTS = 512
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
@@ -87,8 +88,8 @@ sidebar = dbc.Card([
                   marks={5: "5%", 25: "25%", 50: "50%", 100: "100%"}),
 
         html.Label("Epochs", className="fw-bold small mt-3"),
-        dcc.Slider(id="epochs", min=500, max=4000, step=500, value=1500,
-                  marks={500: "500", 2000: "2k", 4000: "4k"}),
+        dcc.Slider(id="epochs", min=100, max=1000, step=100, value=200,
+              marks={100: "100", 500: "500", 1000: "1k"}),
 
         html.Label("Physics weight (λ₂)", className="fw-bold small mt-3"),
         dcc.Slider(id="lambda-pde", min=0.01, max=1.0, step=0.01, value=0.1,
@@ -98,6 +99,7 @@ sidebar = dbc.Card([
                   className="w-100 mt-4", n_clicks=0),
 
         html.Div(id="train-status", className="mt-3 small text-muted"),
+        html.Div(id="train-progress", className="small text-muted"),
 
         html.Hr(),
         html.P("Research experiments", className="fw-bold small mb-2"),
@@ -296,13 +298,18 @@ def show_equation(domain_key):
     State("param-true-n-store", "data"),
     prevent_initial_call=True,
     background=True,
+    progress=Output("train-progress", "children"),
+    progress_default="Training started...",
     running=[(Output("train-btn", "disabled"), True, False)],
 )
-def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
+def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
                  river_key, alpha_val, c_val, mode_val, e_val, load_val,
                  n_val, s0_val, GM_val, EI_val, L_val, q0_val,
                  gate_width_val, res_area_val, true_n_val):
     fraction = fraction_pct / 100.0
+
+    def report_progress(epoch, _history):
+        set_progress(f"Training {domain_key}: epoch {epoch + 1} / {epochs}")
 
     try:
         if domain_key == "fluids":
@@ -310,7 +317,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
                 "fluids", river_key=river_key or "volta",
                 n_manning=n_val, S0=s0_val)
             model, hist, stats, extra = train_domain(
-                "fluids", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
+                "fluids", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde,
+                n_colloc=DASH_COLLOCATION_POINTS, callback=report_progress)
 
             fig_true, fig_pred = make_3d_surface_pair(
                 data["x"]/1000, data["t"]/3600, data["h"], extra["h_pred"],
@@ -360,7 +368,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
             alpha = alpha_val or 0.05
             data = generate_domain_data("heat", alpha=alpha)
             model, hist, stats, extra = train_domain(
-                "heat", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
+                "heat", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde,
+                n_colloc=DASH_COLLOCATION_POINTS, callback=report_progress)
 
             fig_true, fig_pred = make_3d_surface_pair(
                 data["x"], data["t"], data["T"], extra["T_pred"],
@@ -383,7 +392,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
         if domain_key == "wave":
             data = generate_domain_data("wave", c=c_val or 1.0, mode=mode_val or 1)
             model, hist, stats, extra = train_domain(
-                "wave", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
+                "wave", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde,
+                n_colloc=DASH_COLLOCATION_POINTS, callback=report_progress)
 
             fig_true, fig_pred = make_3d_surface_pair(
                 data["x"], data["t"], data["U"], extra["U_pred"],
@@ -406,7 +416,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
         if domain_key == "gravity":
             data = generate_domain_data("gravity", eccentricity=e_val or 0.3, GM=GM_val or 1.0)
             model, hist, stats, extra = train_domain(
-                "gravity", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
+                "gravity", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde,
+                n_colloc=DASH_COLLOCATION_POINTS, callback=report_progress)
 
             n_show = extra["n_train"]
             train_idx = np.random.RandomState(0).choice(len(data["t"]), n_show, replace=False)
@@ -430,7 +441,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
                 "elasticity", load_type=load_val or "uniform",
                 EI=EI_val or 1.0, q0=q0_val or 1.0, L=L_val or 1.0)
             model, hist, stats, extra = train_domain(
-                "elasticity", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
+                "elasticity", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde,
+                n_colloc=DASH_COLLOCATION_POINTS, callback=report_progress)
 
             n_show = extra["n_train"]
             train_idx = np.random.RandomState(0).choice(len(data["x"]), n_show, replace=False)
@@ -454,7 +466,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
                 "dam", gate_width=gate_width_val or 10.0,
                 reservoir_area=res_area_val or 1e6)
             model, hist, stats, extra = train_domain(
-                "dam", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
+                "dam", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde,
+                n_colloc=DASH_COLLOCATION_POINTS, callback=report_progress)
 
             fig_z, fig_q = make_dam_reservoir_fig(
                 data["t_res"], data["Z"], extra["Z_pred"],
@@ -481,7 +494,8 @@ def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
             data = generate_domain_data("inverse_fluids", river_key=river_key or "volta",
                                         true_n=true_n_val or 0.035)
             model, hist, stats, extra = train_domain(
-                "inverse_fluids", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde)
+                "inverse_fluids", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde,
+                n_colloc=DASH_COLLOCATION_POINTS, callback=report_progress)
 
             x_km = np.linspace(0, data["cfg"]["length"] / 1000, 200)
             fig_n = make_n_field_fig(x_km, extra["n_field"], extra["true_n"])
