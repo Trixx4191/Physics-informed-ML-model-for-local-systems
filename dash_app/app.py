@@ -13,7 +13,8 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import dash
-from dash import dcc, html, Input, Output, State, callback_context
+import diskcache
+from dash import dcc, html, Input, Output, State, DiskcacheManager
 import dash_bootstrap_components as dbc
 import numpy as np
 
@@ -28,8 +29,15 @@ from experiments.sparsity_and_uncertainty import (
 )
 from data.generator import RIVERS, generate_sparse_observations
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY],
-               suppress_callback_exceptions=True)
+background_cache = diskcache.Cache(
+    os.environ.get("DASH_CACHE_DIR", "/tmp/pinn-dash-cache")
+)
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.FLATLY],
+    suppress_callback_exceptions=True,
+    background_callback_manager=DiskcacheManager(background_cache),
+)
 app.title = "PINN Multi-Physics Explorer"
 server = app.server  # exposed for gunicorn / Hugging Face Spaces
 
@@ -287,6 +295,8 @@ def show_equation(domain_key):
     State("param-res-area-store", "data"),
     State("param-true-n-store", "data"),
     prevent_initial_call=True,
+    background=True,
+    running=[(Output("train-btn", "disabled"), True, False)],
 )
 def run_training(n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
                  river_key, alpha_val, c_val, mode_val, e_val, load_val,
