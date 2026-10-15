@@ -177,7 +177,8 @@ def generate_domain_data(domain_key, river_key="volta", **kwargs):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
-                 lambda_pde=0.1, hidden=64, depth=4, seed=0, callback=None):
+                 lambda_pde=0.1, hidden=64, depth=4, seed=0, callback=None,
+                 n_colloc=3000):
     """
     Universal training dispatcher.
     Returns: model, history, stats (normalisation), extra (predictions etc.)
@@ -216,7 +217,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
         model, hist = train_pinn_adaptive(
             model, coords, targets,
             n_epochs=n_epochs, lr=lr,
-            n_colloc=2000, warmup_epochs=warmup,
+            n_colloc=n_colloc, warmup_epochs=warmup,
             alpha_ema=0.9, grad_norm_every=20,
             callback=callback
         )
@@ -261,7 +262,8 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
         targets = torch.tensor(((data["Y"][idx]-y_m)/y_s).reshape(-1,1), dtype=torch.float32)
 
         model, hist = train_pinn(model, coords, targets, n_epochs=n_epochs,
-                                 lr=lr, lambda_pde=lambda_pde, callback=callback)
+                                 lr=lr, lambda_pde=lambda_pde, n_colloc=n_colloc,
+                                 callback=callback)
 
         coords_full = torch.tensor(np.stack([
             (data["X"]-x_m)/x_s, (data["Tt"]-t_m)/t_s], axis=1), dtype=torch.float32)
@@ -290,7 +292,8 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
         targets = torch.tensor(((data["Y"][idx]-y_m)/y_s).reshape(-1,1), dtype=torch.float32)
 
         model, hist = train_pinn(model, coords, targets, n_epochs=n_epochs,
-                                 lr=lr, lambda_pde=lambda_pde, callback=callback)
+                                 lr=lr, lambda_pde=lambda_pde, n_colloc=n_colloc,
+                                 callback=callback)
 
         coords_full = torch.tensor(np.stack([
             (data["X"]-x_m)/x_s, (data["Tt"]-t_m)/t_s], axis=1), dtype=torch.float32)
@@ -319,7 +322,8 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
 
         model, hist = train_pinn(model, coords, targets, n_epochs=n_epochs,
                                  lr=lr, lambda_pde=lambda_pde,
-                                 colloc_ranges=[(-2,2)], callback=callback)
+                                 n_colloc=n_colloc, colloc_ranges=[(-2,2)],
+                                 callback=callback)
 
         coords_full = torch.tensor(((data["t"]-t_m)/t_s).reshape(-1,1), dtype=torch.float32)
         model.eval()
@@ -347,7 +351,8 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
 
         model, hist = train_pinn(model, coords, targets, n_epochs=n_epochs,
                                  lr=lr*0.5, lambda_pde=0.01,
-                                 colloc_ranges=[(-2,2)], callback=callback)
+                                 n_colloc=n_colloc, colloc_ranges=[(-2,2)],
+                                 callback=callback)
 
         coords_full = torch.tensor(((data["x"]-x_m)/x_s).reshape(-1,1), dtype=torch.float32)
         model.eval()
@@ -360,7 +365,8 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
 
     if domain_key == "dam":
         model, hist = train_dam_system(data, n_epochs=n_epochs, lr=lr,
-                                       lambda_pde=lambda_pde, callback=callback)
+                           lambda_pde=lambda_pde, n_colloc=n_colloc,
+                           callback=callback)
 
         t_res = data["t_res"]
         t_norm = (t_res - t_res.mean()) / t_res.std()
@@ -406,6 +412,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
             extra_params=pde.n_net.parameters(),
             extra_penalty_fn=pde.smoothness_penalty,
             n_epochs=n_epochs, lr=lr, lambda_pde=lambda_pde, lambda_extra=0.005,
+            n_colloc=n_colloc,
             history_extra_key="n_inferred", history_extra_fn=n_tracker,
             callback=callback)
 
