@@ -4,19 +4,19 @@ This project is already structured for a live Dash deployment.
 
 ## Recommended first target
 
-Use Render or Railway with the included Dockerfile.
+Use the Render Blueprint defined in `render.yaml`. It configures a native Python
+web service, installs `requirements.txt`, starts the Dash server with Gunicorn,
+and checks `/healthz`.
 
 ## Fastest path
 
 1. Push this repo to GitHub.
-2. Create a new Render web service.
-3. Connect the repo.
-4. Use the existing Dockerfile.
-5. Set the start command to:
+2. In Render, create a new Blueprint and connect the repo.
+3. Confirm the service uses the settings from `render.yaml`; no separate build,
+   start, or health-check command is needed.
 
-   gunicorn dash_app.app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 300
-
-6. Set health check path to `/healthz`.
+The repository also includes a Dockerfile for Docker-based deployments. Do not
+select Docker when deploying the Blueprint above.
 
 ## Local production-style check
 
