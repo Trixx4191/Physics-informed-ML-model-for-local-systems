@@ -2,7 +2,7 @@
 
 A modular framework for **physics-informed neural networks (PINNs)** that recovers physical fields from sparse sensor data. One shared training engine handles several different PDE systems: open-channel river flow (Saint-Venant), heat diffusion, wave propagation, orbital mechanics, and beam bending. Includes a dam/reservoir model, uncertainty estimates, and an interactive web app.
 
-**[Live demo](https://huggingface.co/spaces/trixx4191/pinn-explorer)** · **[Paper source](paper/generate_paper.py)** · **[3D orbit demo](https://trixx4191.github.io/Physics-informed-ML-model-for-local-systems/threejs_orbit/orbit_scene.html)**
+**[Live demo](https://huggingface.co/spaces/trixx4191/pinn-explorer)** · **[Paper source](paper/generate_paper.py)**
 
 ![Overview](results/figures/overview.png)
 
