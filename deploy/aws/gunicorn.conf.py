@@ -1,0 +1,11 @@
+bind = '127.0.0.1:8050'
+workers = 1
+worker_class = 'gthread'
+threads = 2
+timeout = 300
+graceful_timeout = 30
+keepalive = 5
+preload_app = False
+accesslog = '-'
+errorlog = '-'
+capture_output = True
