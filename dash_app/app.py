@@ -70,7 +70,7 @@ control_bar = html.Div([
         html.Div([
             control_field("Data fraction (%)", dcc.Slider(
                 id="data-fraction", min=5, max=100, step=5, value=15,
-                marks={5: "5%", 25: "25%", 50: "50%", 100: "100%"})),
+                marks={5: "5%", 50: "50%", 100: "100%"})),
             control_field("Epochs", dcc.Slider(
                 id="epochs", min=100, max=1000, step=100, value=200,
                 marks={100: "100", 500: "500", 1000: "1k"})),
