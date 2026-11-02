@@ -49,130 +49,139 @@ def healthz():
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
-sidebar = dbc.Card([
-    dbc.CardBody([
-        html.H4("PINN Explorer", className="mb-1"),
-        html.P("Physics-informed ML across 5 domains", className="text-muted small mb-3"),
-        html.Hr(),
+def control_field(label, component, *, wide=False):
+    """A compact labelled control, shared by the toolbar and experiments."""
+    if isinstance(component, dcc.Slider):
+        component.tooltip = {"placement": "bottom", "always_visible": False}
+    return html.Div([
+        html.Label(label, htmlFor=component.id, className="control-label"),
+        component,
+    ], className="control-field" + (" control-field-wide" if wide else ""))
 
-        html.Label("Physics domain", className="fw-bold small"),
-        dcc.Dropdown(
+
+control_bar = html.Div([
+    html.Div([
+        control_field("Domain", dcc.Dropdown(
             id="domain-select",
             options=[{"label": v["label"], "value": k} for k, v in DOMAIN_INFO.items()],
-            value="fluids", clearable=False, className="mb-3"
-        ),
-
-        html.Div(id="domain-params"),  # populated dynamically per domain
-        # Hidden stores hold the CURRENT domain-specific param value, kept in
-        # sync by sync_param_stores(). The training callback reads these
-        # instead of binding directly to dynamically-created components,
-        # which Dash cannot do safely (component may not exist in the DOM yet).
-        dcc.Store(id="param-river-store", data="volta"),
-        dcc.Store(id="param-alpha-store", data=0.05),
-        dcc.Store(id="param-c-store", data=1.0),
-        dcc.Store(id="param-mode-store", data=1),
-        dcc.Store(id="param-e-store", data=0.3),
-        dcc.Store(id="param-load-store", data="uniform"),
-        dcc.Store(id="param-n-store", data=0.035),
-        dcc.Store(id="param-s0-store", data=0.0008),
-        dcc.Store(id="param-GM-store", data=1.0),
-        dcc.Store(id="param-EI-store", data=1.0),
-        dcc.Store(id="param-L-store", data=1.0),
-        dcc.Store(id="param-q0-store", data=1.0),
-        dcc.Store(id="param-gate-width-store", data=10.0),
-        dcc.Store(id="param-res-area-store", data=1000000.0),
-        dcc.Store(id="param-true-n-store", data=0.035),
-
-        html.Hr(),
-        html.Label("Training data fraction (%)", className="fw-bold small"),
-        dcc.Slider(id="data-fraction", min=5, max=100, step=5, value=15,
-                  marks={5: "5%", 25: "25%", 50: "50%", 100: "100%"}),
-
-        html.Label("Epochs", className="fw-bold small mt-3"),
-        dcc.Slider(id="epochs", min=100, max=1000, step=100, value=200,
-              marks={100: "100", 500: "500", 1000: "1k"}),
-
-        html.Label("Physics weight (λ₂)", className="fw-bold small mt-3"),
-        dcc.Slider(id="lambda-pde", min=0.01, max=1.0, step=0.01, value=0.1,
-                  marks={0.01: "0.01", 0.5: "0.5", 1.0: "1.0"}),
-
-        dbc.Button("Train PINN", id="train-btn", color="primary",
-                  className="w-100 mt-4", n_clicks=0),
-
-        html.Div(id="train-status", className="mt-3 small text-muted"),
-        html.Div(id="train-progress", className="small text-muted"),
-
-        html.Hr(),
-        html.P("Research experiments", className="fw-bold small mb-2"),
-
-        dbc.Button("Sparsity sweep", id="sparsity-btn", color="secondary",
-                  outline=True, className="w-100 mb-2", n_clicks=0),
-
+            value="fluids", clearable=False,
+        ), wide=True),
+        html.Div(id="domain-params", className="domain-params"),
         html.Div([
-            html.Label("Fractions to test", className="small text-muted"),
-            dcc.Checklist(
+            control_field("Data fraction (%)", dcc.Slider(
+                id="data-fraction", min=5, max=100, step=5, value=15,
+                marks={5: "5%", 25: "25%", 50: "50%", 100: "100%"})),
+            control_field("Epochs", dcc.Slider(
+                id="epochs", min=100, max=1000, step=100, value=200,
+                marks={100: "100", 500: "500", 1000: "1k"})),
+            control_field("Physics weight λ₂", dcc.Slider(
+                id="lambda-pde", min=0.01, max=1.0, step=0.01, value=0.1,
+                marks={0.01: "0.01", 0.5: "0.5", 1.0: "1.0"})),
+        ], className="training-params"),
+    ], className="control-inputs", tabIndex=0,
+       **{"aria-label": "Domain and training controls; scroll horizontally on smaller screens"}),
+    html.Div([
+        dbc.Button("Train PINN", id="train-btn", color="primary", n_clicks=0),
+        html.Div([
+            html.Div(id="train-status"),
+            html.Div(id="train-progress"),
+        ], className="training-status", role="status", **{"aria-live": "polite"}),
+    ], className="training-actions"),
+], className="control-bar", role="region", **{"aria-label": "Training controls"})
+
+experiment_controls = html.Div([
+    html.Section([
+        html.H2("Sparsity sweep", className="section-title"),
+        html.P("Compare PINN and vanilla MLP accuracy across observation fractions.",
+               className="section-description"),
+        html.Div([
+            control_field("Fractions to test", dcc.Checklist(
                 id="sparsity-fractions",
                 options=[{"label": f" {p}%", "value": p/100}
                          for p in [5, 10, 20, 50, 100]],
-                value=[0.05, 0.10, 0.20, 0.50, 1.00],
-                inline=True, className="small"
-            ),
-            html.Label("Seeds per fraction", className="small text-muted mt-1"),
-            dcc.Slider(id="sparsity-seeds", min=1, max=5, step=1, value=2,
-                      marks={i: str(i) for i in range(1,6)},
-                      className="mb-2"),
-        ], id="sparsity-controls"),
-
-        dbc.Button("MC Dropout uncertainty", id="mcdrop-btn", color="secondary",
-                  outline=True, className="w-100 mb-2", n_clicks=0),
-
+                value=[0.05, 0.10, 0.20, 0.50, 1.00], inline=True,
+                className="fraction-checklist")),
+            control_field("Seeds per fraction", dcc.Slider(
+                id="sparsity-seeds", min=1, max=5, step=1, value=2,
+                marks={i: str(i) for i in range(1, 6)})),
+            dbc.Button("Sparsity sweep", id="sparsity-btn", color="secondary",
+                       outline=True, n_clicks=0),
+        ], id="sparsity-controls", className="experiment-fields"),
+    ], className="experiment-section"),
+    html.Section([
+        html.H2("MC Dropout uncertainty", className="section-title"),
+        html.P("Estimate epistemic uncertainty with repeated stochastic predictions.",
+               className="section-description"),
         html.Div([
-            html.Label("Dropout p", className="small text-muted"),
-            dcc.Slider(id="dropout-p", min=0.02, max=0.20, step=0.02, value=0.08,
-                      marks={0.02:"0.02", 0.10:"0.10", 0.20:"0.20"}),
-            html.Label("MC samples", className="small text-muted mt-1"),
-            dcc.Slider(id="mc-samples", min=50, max=300, step=50, value=100,
-                      marks={50:"50", 150:"150", 300:"300"}),
-        ], id="mcdrop-controls"),
-    ])
-], className="h-100")
+            control_field("Dropout p", dcc.Slider(
+                id="dropout-p", min=0.02, max=0.20, step=0.02, value=0.08,
+                marks={0.02: "0.02", 0.10: "0.10", 0.20: "0.20"})),
+            control_field("MC samples", dcc.Slider(
+                id="mc-samples", min=50, max=300, step=50, value=100,
+                marks={50: "50", 150: "150", 300: "300"})),
+            dbc.Button("MC Dropout uncertainty", id="mcdrop-btn", color="secondary",
+                       outline=True, n_clicks=0),
+        ], id="mcdrop-controls", className="experiment-fields"),
+    ], className="experiment-section"),
+], className="experiment-controls")
 
-main_panel = html.Div([
-    html.Div(id="equation-display", className="mb-3"),
-    dcc.Loading(
-        id="loading-train",
-        type="circle",
-        children=html.Div(id="results-area")
-    ),
-    html.Hr(className="mt-4"),
-    dcc.Loading(
-        id="loading-experiments",
-        type="dot",
-        children=html.Div(id="experiment-results-area")
-    ),
-])
-
-app.layout = dbc.Container([
-    dbc.Row(
-        dbc.Col(
-            dbc.Card([
-                dbc.CardBody([
-                    html.H2("PINN Multi-Physics Explorer", className="mb-1"),
-                    html.P(
-                        "Interactive Dash dashboard for training and visualising PINN models across multiple physics domains.",
-                        className="text-muted mb-0"
-                    ),
-                ])
-            ], className="shadow-sm mb-3"),
-            width=12
-        )
-    ),
-    dbc.Row([
-        dbc.Col(sidebar, width=3, className="py-3"),
-        dbc.Col(main_panel, width=9, className="py-3"),
-    ], className="g-0"),
+app.layout = html.Div([
+    html.Header([
+        html.H1("PINN Multi-Physics Explorer"),
+        html.Span("Scientific workspace · 7 domains"),
+    ], className="workspace-header"),
+    control_bar,
+    html.Div(id="equation-display", className="equation-strip"),
+    html.Main([
+        dbc.Tabs([
+            dbc.Tab(label="Solution", tab_id="solution"),
+            dbc.Tab(label="Experiments", tab_id="experiments"),
+        ], id="workspace-tabs", active_tab="solution", className="workspace-tabs"),
+        # Keep both panels mounted: switching tabs must preserve controls,
+        # figures, and the targets of in-flight background callbacks.
+        html.Section([
+            dcc.Loading(id="loading-train", type="circle", children=html.Div(
+                id="results-area", children=html.Div([
+                    html.H2("Solution workspace", className="section-title"),
+                    html.P("Choose a domain and training parameters, then train a PINN "
+                           "to compare its solution with the reference data."),
+                ], className="empty-state"))),
+        ], id="solution-panel"),
+        html.Section([
+            experiment_controls,
+            dcc.Loading(id="loading-experiments", type="dot",
+                        children=html.Div(id="experiment-results-area")),
+        ], id="experiments-panel", style={"display": "none"}),
+    ], className="workspace-main"),
+    # Dynamic controls write into permanent stores so background callbacks
+    # can safely read their values even when another domain is selected.
+    dcc.Store(id="param-river-store", data="volta"),
+    dcc.Store(id="param-alpha-store", data=0.05),
+    dcc.Store(id="param-c-store", data=1.0),
+    dcc.Store(id="param-mode-store", data=1),
+    dcc.Store(id="param-e-store", data=0.3),
+    dcc.Store(id="param-load-store", data="uniform"),
+    dcc.Store(id="param-n-store", data=0.035),
+    dcc.Store(id="param-s0-store", data=0.0008),
+    dcc.Store(id="param-GM-store", data=1.0),
+    dcc.Store(id="param-EI-store", data=1.0),
+    dcc.Store(id="param-L-store", data=1.0),
+    dcc.Store(id="param-q0-store", data=1.0),
+    dcc.Store(id="param-gate-width-store", data=10.0),
+    dcc.Store(id="param-res-area-store", data=1000000.0),
+    dcc.Store(id="param-true-n-store", data=0.035),
     dcc.Store(id="trained-results-store"),
-], fluid=True)
+], className="laboratory-workspace")
+
+
+@app.callback(
+    Output("solution-panel", "style"), Output("experiments-panel", "style"),
+    Input("workspace-tabs", "active_tab"),
+)
+def switch_workspace(active_tab):
+    if active_tab == "experiments":
+        return {"display": "none"}, {"display": "block"}
+    return {"display": "block"}, {"display": "none"}
 
 
 # ── Dynamic per-domain parameter controls ───────────────────────────────────────
@@ -183,93 +192,93 @@ def render_domain_params(domain_key):
         river_options = [{"label": v["name"], "value": k}
                          for k, v in RIVERS.items() if k != "dam"]
         return html.Div([
-            html.Label("River", className="fw-bold small mt-2"),
-            dcc.Dropdown(id="param-river", options=river_options,
-                        value="volta", clearable=False),
-            html.Label("Manning n", className="fw-bold small mt-3"),
-            dcc.Slider(id="param-n", min=0.01, max=0.06, step=0.005, value=0.035,
-                       marks={0.01: "0.01", 0.03: "0.03", 0.06: "0.06"}),
-            html.Label("Bed slope S0", className="fw-bold small mt-3"),
-            dcc.Slider(id="param-s0", min=0.0001, max=0.002, step=0.0001, value=0.0008,
-                       marks={0.0001: "1e-4", 0.0008: "8e-4", 0.002: "2e-3"}),
-        ])
+            control_field("River", dcc.Dropdown(id="param-river", options=river_options,
+                          value="volta", clearable=False), wide=True),
+            control_field("Manning n", dcc.Slider(
+                id="param-n", min=0.01, max=0.06, step=0.005, value=0.035,
+                marks={0.01: "0.01", 0.03: "0.03", 0.06: "0.06"})),
+            control_field("Bed slope S0", dcc.Slider(
+                id="param-s0", min=0.0001, max=0.002, step=0.0001, value=0.0008,
+                marks={0.0001: "1e-4", 0.0008: "8e-4", 0.002: "2e-3"})),
+        ], className="domain-fields")
     if domain_key == "heat":
         return html.Div([
-            html.Label("Thermal diffusivity α", className="fw-bold small mt-2"),
-            dcc.Slider(id="param-alpha", min=0.005, max=0.15, step=0.005, value=0.05,
-                      marks={0.005: "0.005", 0.05: "0.05", 0.15: "0.15"}),
-        ])
+            control_field("Thermal diffusivity α", dcc.Slider(
+                id="param-alpha", min=0.005, max=0.15, step=0.005, value=0.05,
+                marks={0.005: "0.005", 0.05: "0.05", 0.15: "0.15"})),
+        ], className="domain-fields")
     if domain_key == "wave":
         return html.Div([
-            html.Label("Wave speed c", className="fw-bold small mt-2"),
-            dcc.Slider(id="param-c", min=0.5, max=3.0, step=0.1, value=1.0,
-                      marks={0.5: "0.5", 1.5: "1.5", 3.0: "3.0"}),
-            html.Label("Vibration mode", className="fw-bold small mt-2"),
-            dcc.Slider(id="param-mode", min=1, max=4, step=1, value=1,
-                      marks={i: str(i) for i in range(1, 5)}),
-        ])
+            control_field("Wave speed c", dcc.Slider(
+                id="param-c", min=0.5, max=3.0, step=0.1, value=1.0,
+                marks={0.5: "0.5", 1.5: "1.5", 3.0: "3.0"})),
+            control_field("Vibration mode", dcc.Slider(
+                id="param-mode", min=1, max=4, step=1, value=1,
+                marks={i: str(i) for i in range(1, 5)})),
+        ], className="domain-fields")
     if domain_key == "gravity":
         return html.Div([
-            html.Label("Orbital eccentricity", className="fw-bold small mt-2"),
-            dcc.Slider(id="param-e", min=0.0, max=0.8, step=0.05, value=0.3,
-                      marks={0: "circular", 0.4: "0.4", 0.8: "0.8"}),
-            html.Label("Central mass parameter GM", className="fw-bold small mt-3"),
-            dcc.Slider(id="param-GM", min=0.1, max=5.0, step=0.1, value=1.0,
-                      marks={0.1: "0.1", 1.0: "1.0", 5.0: "5.0"}),
-        ])
+            control_field("Orbital eccentricity", dcc.Slider(
+                id="param-e", min=0.0, max=0.8, step=0.05, value=0.3,
+                marks={0: "circular", 0.4: "0.4", 0.8: "0.8"})),
+            control_field("Central mass GM", dcc.Slider(
+                id="param-GM", min=0.1, max=5.0, step=0.1, value=1.0,
+                marks={0.1: "0.1", 1.0: "1.0", 5.0: "5.0"})),
+        ], className="domain-fields")
     if domain_key == "elasticity":
         return html.Div([
-            html.Label("Load type", className="fw-bold small mt-2"),
-            dcc.Dropdown(id="param-load", options=[
+            control_field("Load type", dcc.Dropdown(id="param-load", options=[
                 {"label": "Uniform load", "value": "uniform"},
                 {"label": "Point load (midspan)", "value": "point"},
-            ], value="uniform", clearable=False),
-            html.Label("Flexural rigidity EI", className="fw-bold small mt-3"),
-            dcc.Slider(id="param-EI", min=0.1, max=5.0, step=0.1, value=1.0,
-                       marks={0.1: "0.1", 1.0: "1.0", 5.0: "5.0"}),
-            html.Label("Beam length L", className="fw-bold small mt-3"),
-            dcc.Slider(id="param-L", min=0.5, max=3.0, step=0.1, value=1.0,
-                       marks={0.5: "0.5", 1.0: "1.0", 3.0: "3.0"}),
-            html.Label("Load amplitude q0", className="fw-bold small mt-3"),
-            dcc.Slider(id="param-q0", min=0.2, max=5.0, step=0.2, value=1.0,
-                       marks={0.2: "0.2", 1.0: "1.0", 5.0: "5.0"}),
-        ])
+            ], value="uniform", clearable=False), wide=True),
+            control_field("Flexural rigidity EI", dcc.Slider(
+                id="param-EI", min=0.1, max=5.0, step=0.1, value=1.0,
+                marks={0.1: "0.1", 1.0: "1.0", 5.0: "5.0"})),
+            control_field("Beam length L", dcc.Slider(
+                id="param-L", min=0.5, max=3.0, step=0.1, value=1.0,
+                marks={0.5: "0.5", 1.0: "1.0", 3.0: "3.0"})),
+            control_field("Load amplitude q0", dcc.Slider(
+                id="param-q0", min=0.2, max=5.0, step=0.2, value=1.0,
+                marks={0.2: "0.2", 1.0: "1.0", 5.0: "5.0"})),
+        ], className="domain-fields")
     if domain_key == "dam":
         return html.Div([
-            html.Label("Gate width", className="fw-bold small mt-2"),
-            dcc.Slider(id="param-gate-width", min=2.0, max=30.0, step=1.0, value=10.0,
-                       marks={2: "2", 10: "10", 30: "30"}),
-            html.Label("Reservoir area", className="fw-bold small mt-3"),
-            dcc.Slider(id="param-res-area", min=1e5, max=5e6, step=1e5, value=1e6,
-                       marks={1e5: "1e5", 1e6: "1e6", 5e6: "5e6"}),
-            html.P("Adjust gate geometry and reservoir storage for better operational realism.",
-                   className="text-muted small mt-2"),
-        ])
+            control_field("Gate width", dcc.Slider(
+                id="param-gate-width", min=2.0, max=30.0, step=1.0, value=10.0,
+                marks={2: "2", 10: "10", 30: "30"})),
+            control_field("Reservoir area", dcc.Slider(
+                id="param-res-area", min=1e5, max=5e6, step=1e5, value=1e6,
+                marks={1e5: "1e5", 1e6: "1e6", 5e6: "5e6"})),
+        ], className="domain-fields")
     if domain_key == "inverse_fluids":
         river_options = [{"label": v["name"], "value": k}
                          for k, v in RIVERS.items() if k != "dam"]
         return html.Div([
-            html.Label("River (sets true n, hidden from the model)",
-                      className="fw-bold small mt-2"),
-            dcc.Dropdown(id="param-river", options=river_options,
-                        value="volta", clearable=False),
-            html.Label("True Manning n", className="fw-bold small mt-3"),
-            dcc.Slider(id="param-true-n", min=0.01, max=0.06, step=0.005, value=0.035,
-                       marks={0.01: "0.01", 0.03: "0.03", 0.06: "0.06"}),
-            html.P("The PINN infers n(x) from sparse observations and the physics residual.",
-                   className="text-muted small mt-2"),
-        ])
+            control_field("River", dcc.Dropdown(id="param-river", options=river_options,
+                          value="volta", clearable=False), wide=True),
+            control_field("True Manning n", dcc.Slider(
+                id="param-true-n", min=0.01, max=0.06, step=0.005, value=0.035,
+                marks={0.01: "0.01", 0.03: "0.03", 0.06: "0.06"})),
+        ], className="domain-fields")
     return html.Div()
 
 
 @app.callback(Output("equation-display", "children"), Input("domain-select", "value"))
 def show_equation(domain_key):
     info = DOMAIN_INFO[domain_key]
-    return dbc.Alert([
-        html.Div([html.Strong(info["label"])], className="mb-2"),
-        html.Code(info["equation"], className="small mb-2 d-block"),
-        html.P(info.get("description", ""), className="small mb-0 text-muted"),
-    ], color="light", className="border")
+    notes = {
+        "dam": "Adjust gate geometry and reservoir storage for better operational realism.",
+        "inverse_fluids": "River (sets true n, hidden from the model). "
+                          "The PINN infers n(x) from sparse observations and the physics residual.",
+    }
+    return html.Div([
+        html.Div([
+            html.Strong(info["label"]),
+            html.Code(info["equation"]),
+        ], className="equation-line"),
+        html.P(info.get("description", ""), className="equation-description"),
+        *([html.P(notes[domain_key], className="equation-note")] if domain_key in notes else []),
+    ])
 
 
 # ── Main training callback ──────────────────────────────────────────────────────
@@ -345,6 +354,22 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                         ("λ (self-calibrated)", f"{lam_final:.4f}"),
                         ("Training pts", extra["n_train"]),
                     ]),
+                    html.Div([
+                        html.H6("Water depth h(x,t)", className="figure-heading"),
+                        html.Div([
+                            dcc.Graph(figure=fig_true),
+                            dcc.Graph(figure=fig_pred),
+                        ], className="figure-grid"),
+                        html.H6("Velocity u(x,t)", className="figure-heading"),
+                        html.Div([
+                            dcc.Graph(figure=fig_u_true),
+                            dcc.Graph(figure=fig_u_pred),
+                        ], className="figure-grid"),
+                    ], className="primary-visualisations"),
+                    html.Section([
+                        html.H6("Training loss (adaptive λ)", className="figure-heading"),
+                        dcc.Graph(figure=make_adaptive_loss_fig(hist)),
+                    ], className="loss-panel"),
                     dbc.Alert([
                         html.Strong("Architecture: "),
                         "Dual-head PINN (separate h and u decoders) + Wang et al. 2021 "
@@ -352,20 +377,8 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                         "consistency and extrapolation accuracy. For interpolation, the "
                         f"data-only ceiling for h is R²≈0.47 — physics regularisation "
                         "trades some interpolation accuracy for guaranteed physical consistency."
-                    ], color="info", className="small mt-2 mb-3"),
-                    html.H6("Water depth h(x,t)", className="mt-2"),
-                    dbc.Row([
-                        dbc.Col(dcc.Graph(figure=fig_true), width=6),
-                        dbc.Col(dcc.Graph(figure=fig_pred), width=6),
-                    ]),
-                    html.H6("Velocity u(x,t)", className="mt-3"),
-                    dbc.Row([
-                        dbc.Col(dcc.Graph(figure=fig_u_true), width=6),
-                        dbc.Col(dcc.Graph(figure=fig_u_pred), width=6),
-                    ]),
-                    html.H6("Training loss (adaptive λ)", className="mt-3"),
-                    dcc.Graph(figure=make_adaptive_loss_fig(hist)),
-                ])
+                    ], color="info", className="domain-note"),
+                ], className="solution-results")
                 return content, f"Trained on {data['cfg']['name']} — {epochs} epochs"
 
             if domain_key == "heat":
@@ -384,13 +397,15 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                     metric_row([("R²", f"{extra['r2']:.4f}"),
                                ("Training pts", extra["n_train"]),
                                ("α (diffusivity)", alpha)]),
-                    dbc.Row([
-                        dbc.Col(dcc.Graph(figure=fig_true), width=6),
-                        dbc.Col(dcc.Graph(figure=fig_pred), width=6),
-                    ]),
-                    html.H6("Training loss", className="mt-3"),
-                    dcc.Graph(figure=make_loss_curve_fig(hist)),
-                ])
+                    html.Div([
+                        dcc.Graph(figure=fig_true),
+                        dcc.Graph(figure=fig_pred),
+                    ], className="figure-grid primary-visualisations"),
+                    html.Section([
+                        html.H6("Training loss", className="figure-heading"),
+                        dcc.Graph(figure=make_loss_curve_fig(hist)),
+                    ], className="loss-panel"),
+                ], className="solution-results")
                 return content, f"Heat diffusion trained — {epochs} epochs"
 
             if domain_key == "wave":
@@ -408,13 +423,15 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                     metric_row([("R²", f"{extra['r2']:.4f}"),
                                ("Training pts", extra["n_train"]),
                                ("Wave speed c", data["c"])]),
-                    dbc.Row([
-                        dbc.Col(dcc.Graph(figure=fig_true), width=6),
-                        dbc.Col(dcc.Graph(figure=fig_pred), width=6),
-                    ]),
-                    html.H6("Training loss", className="mt-3"),
-                    dcc.Graph(figure=make_loss_curve_fig(hist)),
-                ])
+                    html.Div([
+                        dcc.Graph(figure=fig_true),
+                        dcc.Graph(figure=fig_pred),
+                    ], className="figure-grid primary-visualisations"),
+                    html.Section([
+                        html.H6("Training loss", className="figure-heading"),
+                        dcc.Graph(figure=make_loss_curve_fig(hist)),
+                    ], className="loss-panel"),
+                ], className="solution-results")
                 return content, f"Wave equation trained — {epochs} epochs"
 
             if domain_key == "gravity":
@@ -434,10 +451,12 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                                ("Training pts", extra["n_train"]),
                                ("Eccentricity", data["e"]),
                                ("GM", f"{data['GM']:.2f}")]),
-                    dcc.Graph(figure=fig_orbit),
-                    html.H6("Training loss", className="mt-3"),
-                    dcc.Graph(figure=make_loss_curve_fig(hist)),
-                ])
+                    html.Div(dcc.Graph(figure=fig_orbit), className="primary-visualisations"),
+                    html.Section([
+                        html.H6("Training loss", className="figure-heading"),
+                        dcc.Graph(figure=make_loss_curve_fig(hist)),
+                    ], className="loss-panel"),
+                ], className="solution-results")
                 return content, f"Orbit reconstructed from {fraction_pct}% of trajectory"
 
             if domain_key == "elasticity":
@@ -459,10 +478,12 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                                ("EI", f"{data['EI']:.2f}"),
                                ("Beam L", f"{data['L']:.1f}"),
                                ("q0", f"{data['q0']:.2f}")]),
-                    dcc.Graph(figure=fig_beam),
-                    html.H6("Training loss", className="mt-3"),
-                    dcc.Graph(figure=make_loss_curve_fig(hist)),
-                ])
+                    html.Div(dcc.Graph(figure=fig_beam), className="primary-visualisations"),
+                    html.Section([
+                        html.H6("Training loss", className="figure-heading"),
+                        dcc.Graph(figure=make_loss_curve_fig(hist)),
+                    ], className="loss-panel"),
+                ], className="solution-results")
                 return content, f"Beam deflection trained — {epochs} epochs"
 
             if domain_key == "dam":
@@ -483,15 +504,19 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                     metric_row([("Reservoir level R²", f"{extra['r2_z']:.4f}"),
                                ("Time steps", extra["n_train"]),
                                ("Reservoir area", f"{data['cfg']['reservoir_area']:.0e} m²")]),
-                    dbc.Row([
-                        dbc.Col(dcc.Graph(figure=fig_z), width=6),
-                        dbc.Col(dcc.Graph(figure=fig_q), width=6),
-                    ]),
-                    html.H6("Downstream reach (ground truth, fixed solver)", className="mt-3"),
-                    dcc.Graph(figure=fig_reach),
-                    html.H6("Training loss", className="mt-3"),
-                    dcc.Graph(figure=make_dam_loss_curve_fig(hist)),
-                ])
+                    html.Div([
+                        html.Div([
+                            dcc.Graph(figure=fig_z),
+                            dcc.Graph(figure=fig_q),
+                        ], className="figure-grid"),
+                        html.H6("Downstream reach (ground truth, fixed solver)", className="figure-heading"),
+                        dcc.Graph(figure=fig_reach),
+                    ], className="primary-visualisations"),
+                    html.Section([
+                        html.H6("Training loss", className="figure-heading"),
+                        dcc.Graph(figure=make_dam_loss_curve_fig(hist)),
+                    ], className="loss-panel"),
+                ], className="solution-results")
                 return content, f"Dam system trained — {epochs} epochs"
 
             if domain_key == "inverse_fluids":
@@ -509,18 +534,20 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                                ("Inferred n", f"{extra['n_final']:.4f}"),
                                ("Relative error", f"{extra['err_pct']:.1f}%"),
                                ("Training pts", extra["n_train"])]),
-                    dcc.Graph(figure=fig_n),
-                    html.H6("Training loss", className="mt-3"),
-                    dcc.Graph(figure=make_loss_curve_fig(hist)),
+                    html.Div(dcc.Graph(figure=fig_n), className="primary-visualisations"),
+                    html.Section([
+                        html.H6("Training loss", className="figure-heading"),
+                        dcc.Graph(figure=make_loss_curve_fig(hist)),
+                    ], className="loss-panel"),
                     dbc.Alert(
                         "Note: roughness inference accuracy is currently capped "
                         "by the same forward-fit ceiling affecting the base "
                         "fluids domain on this flood-wave signal — see project "
                         "notes. Treat the error % as a diagnostic, not a final "
                         "result, until the forward capacity issue is resolved.",
-                        color="warning", className="small mt-3"
+                        color="warning", className="domain-note"
                     ),
-                ])
+                ], className="solution-results")
                 return content, f"Inverse roughness trained — {epochs} epochs"
 
         except Exception as e:
@@ -530,21 +557,13 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
 
 
 def metric_row(pairs):
-    cols = []
-    for label, value in pairs:
-        cols.append(dbc.Col(
-            html.Div([
-                html.Div(str(label), className="text-muted small"),
-                html.Div(str(value), className="fs-5 fw-bold"),
-            ], className="p-2 bg-light rounded text-center"),
-            width=12 // len(pairs)
-        ))
-    return dbc.Row(cols, className="mb-3 g-2")
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8050))
-    app.run(debug=os.environ.get("DASH_DEBUG") == "1", host="0.0.0.0", port=port)
+    return html.Dl([
+        html.Div([
+            html.Dt(str(label), className="metric-label"),
+            html.Dd(str(value), className="metric-value"),
+        ], className="metric")
+        for label, value in pairs
+    ], className="metric-row")
 
 
 # ── Sync dynamic per-domain controls into hidden stores ─────────────────────────
@@ -880,7 +899,7 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
                 dcc.Graph(figure=fig),
                 dcc.Graph(figure=fig2),
                 html.H6("Results table", className="mt-3"),
-                dbc.Table.from_dataframe(df, striped=True, bordered=True,
+                dbc.Table.from_dataframe(df, striped=True, bordered=False,
                                          hover=True, size="sm"),
             ])
 
@@ -1011,3 +1030,8 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
             ])
 
         return html.Div()
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8050))
+    app.run(debug=os.environ.get("DASH_DEBUG") == "1", host="0.0.0.0", port=port)

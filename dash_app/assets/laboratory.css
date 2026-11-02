@@ -1,0 +1,203 @@
+:root {
+  --lab-ink: #24343c;
+  --lab-muted: #61717a;
+  --lab-line: #dde4e7;
+  --lab-accent: #216b80;
+  --Dash-Fill-Interactive-Strong: #216b80;
+}
+
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--lab-ink);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+.laboratory-workspace { min-height: 100vh; }
+.workspace-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 24px 8px;
+}
+.workspace-header h1 { margin: 0; font-size: 16px; font-weight: 650; }
+.workspace-header span { color: var(--lab-muted); font-size: 11px; }
+
+/* One horizontal instrument rail. Overflow stays within the inputs so the
+   action and live feedback remain visible at every viewport width. */
+.control-bar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 88px;
+  padding: 0 24px;
+  background: #fff;
+  border-bottom: 1px solid var(--lab-line);
+}
+.control-inputs {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 10px 3px 20px;
+  scrollbar-width: thin;
+  scrollbar-color: #bccbd0 transparent;
+}
+.control-inputs:focus-visible { outline: 2px solid var(--lab-accent); outline-offset: -2px; }
+.domain-params, .domain-fields, .training-params {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+.domain-params, .training-params {
+  border-left: 1px solid var(--lab-line);
+  padding-left: 12px;
+}
+.control-field { flex: 0 0 112px; width: 112px; min-width: 0; }
+.control-field-wide { flex-basis: 150px; width: 150px; }
+.control-inputs > .control-field-wide { flex-basis: 190px; width: 190px; }
+.control-label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--lab-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.control-field .dash-dropdown { font-size: 12px; }
+.control-field .Select-control { height: 31px; border-color: #cbd6db; border-radius: 2px; }
+.control-field .Select-placeholder,
+.control-field .Select-value { line-height: 29px !important; }
+.control-inputs .Select-menu-outer { position: fixed; top: auto; width: 300px; max-width: calc(100vw - 24px); }
+.control-field .Select-option { white-space: normal; }
+.control-field .is-focused:not(.is-open) > .Select-control {
+  border-color: var(--lab-accent);
+  box-shadow: none;
+}
+.control-field .rc-slider { padding: 7px 0; margin: 5px 8px 0; width: calc(100% - 16px); }
+.control-field .rc-slider-rail { background: #e3e9ec; height: 3px; }
+.control-field .rc-slider-track { background: var(--lab-accent); height: 3px; }
+.control-field .rc-slider-handle {
+  width: 11px;
+  height: 11px;
+  margin-top: -4px;
+  border: 2px solid var(--lab-accent);
+  background: #fff;
+  box-shadow: none;
+}
+.control-field .rc-slider-dot { width: 4px; height: 4px; bottom: 1px; border: 0; background: #bccbd0; }
+.control-field .rc-slider-mark-text { font-size: 10px; color: var(--lab-muted); white-space: nowrap; }
+/* Dash 4 controls use these classes; keep the selectors above for Dash 2/3. */
+.control-field .dash-dropdown { border-radius: 2px; border-color: #cbd6db; }
+.control-field .dash-dropdown-trigger { min-height: 31px; padding: 0 8px; }
+.dash-dropdown-content { box-shadow: none !important; border-radius: 2px !important; font-size: 12px; }
+.control-field .dash-slider-root { margin: 5px 8px 0; width: calc(100% - 16px); }
+.control-field .dash-slider-track { height: 3px; background: #e3e9ec; }
+.control-field .dash-slider-range { background: var(--lab-accent); }
+.control-field .dash-slider-thumb {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--lab-accent);
+  background: #fff;
+  box-shadow: none;
+}
+.control-field .dash-slider-thumb:hover, .control-field .dash-slider-thumb:focus { box-shadow: none; }
+.control-field .dash-slider-mark { font-size: 10px; color: var(--lab-muted); }
+.control-field .dash-slider-tooltip { padding: 4px 6px; box-shadow: none; border: 1px solid var(--lab-line); font-size: 11px; }
+.training-actions { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+.training-status { width: 140px; color: var(--lab-muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+#train-progress:not(:empty) { color: var(--lab-accent); font-variant-numeric: tabular-nums; }
+.laboratory-workspace .btn { border-radius: 2px; box-shadow: none; font-size: 12px; padding: 7px 12px; white-space: nowrap; }
+.laboratory-workspace .btn-primary { background: var(--lab-accent); border-color: var(--lab-accent); }
+.laboratory-workspace .btn-primary:hover { background: #18566a; border-color: #18566a; }
+.laboratory-workspace .btn-outline-secondary { color: var(--lab-ink); border-color: #bdcbd1; }
+.laboratory-workspace .btn-outline-secondary:hover { background: #f2f6f7; }
+
+.equation-strip { padding: 10px 24px; border-bottom: 1px solid var(--lab-line); }
+.equation-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; font-size: 12px; }
+.equation-line strong { font-weight: 600; }
+.equation-line code { color: var(--lab-ink); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+.equation-description, .equation-note { margin: 4px 0 0; color: var(--lab-muted); font-size: 12px; }
+.equation-note { font-size: 11px; }
+.workspace-main { padding: 0 24px 24px; }
+.workspace-tabs { margin: 0 0 10px; border-bottom: 1px solid var(--lab-line); gap: 20px; }
+.workspace-tabs .nav-link {
+  padding: 9px 0 8px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--lab-muted);
+  font-size: 12px;
+  background: transparent;
+}
+.workspace-tabs .nav-link.active { color: var(--lab-accent); border-color: var(--lab-accent); background: transparent; }
+.workspace-tabs .nav-link:hover { color: var(--lab-accent); }
+.section-title, .figure-heading { font-size: 12px; font-weight: 600; margin: 0; }
+.section-description { color: var(--lab-muted); font-size: 12px; margin: 6px 0 16px; }
+.empty-state { padding: 48px 0; color: var(--lab-muted); }
+.empty-state p { margin-top: 8px; font-size: 12px; }
+
+.metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 4px 0 12px;
+  gap: 10px 0;
+  border-bottom: 1px solid var(--lab-line);
+}
+.metric { flex: 1 1 130px; min-width: 0; padding: 0 20px; border-left: 1px solid var(--lab-line); }
+.metric:first-child { padding-left: 0; border-left: 0; }
+.metric-label { color: var(--lab-muted); font-size: 11px; font-weight: 400; }
+.metric-value { margin: 3px 0 0; font-size: 20px; font-weight: 550; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.figure-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.figure-grid > *, .primary-visualisations, .loss-panel { min-width: 0; }
+.figure-heading { margin: 12px 0 4px; color: var(--lab-muted); }
+.loss-panel { margin-top: 12px; padding-top: 2px; border-top: 1px solid var(--lab-line); }
+.laboratory-workspace .alert {
+  padding: 9px 12px;
+  border: 0;
+  border-left: 2px solid #9fbac5;
+  border-radius: 0;
+  background: #f3f7f8;
+  color: #345360;
+  font-size: 12px;
+}
+.laboratory-workspace .alert-warning { border-color: #c7a45c; background: #faf8f1; color: #705b2e; }
+.laboratory-workspace .alert-danger { border-color: #bc6666; background: #fcf4f4; color: #884444; }
+.domain-note { margin: 16px 0 0; }
+
+.experiment-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 14px 0 22px; border-bottom: 1px solid var(--lab-line); }
+.experiment-section + .experiment-section { border-left: 1px solid var(--lab-line); padding-left: 24px; }
+.experiment-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; }
+.experiment-fields .btn { margin-top: 12px; }
+#sparsity-controls .control-field:first-child { flex: 1 1 225px; }
+.fraction-checklist { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; }
+.fraction-checklist input { accent-color: var(--lab-accent); margin-right: 3px; }
+#experiment-results-area { padding-top: 8px; }
+.laboratory-workspace .table { font-size: 12px; --bs-table-striped-bg: #f7f9fa; }
+
+@media (max-width: 1200px) {
+  .training-status { width: 136px; }
+  .control-bar { gap: 12px; }
+}
+@media (max-width: 760px) {
+  .workspace-header { padding: 10px 12px 8px; }
+  .workspace-header span { display: none; }
+  .control-bar { padding: 0 12px; gap: 10px; }
+  .training-actions { flex-direction: column; gap: 4px; width: 120px; }
+  .training-status { width: 120px; font-size: 10px; }
+  .equation-strip { padding: 10px 12px; }
+  .workspace-main { padding: 0 12px 20px; }
+  .figure-grid, .experiment-controls { grid-template-columns: minmax(0, 1fr); }
+  .experiment-section + .experiment-section { border-left: 0; border-top: 1px solid var(--lab-line); padding: 18px 0 0; }
+  .metric { flex-basis: 115px; padding: 0 12px; }
+}
