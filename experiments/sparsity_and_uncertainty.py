@@ -140,7 +140,7 @@ def train_mc_dropout(pde_module: PDEModule, data_coords, data_targets,
         optimizer.step()
         scheduler.step()
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 or epoch == n_epochs - 1:
             history["epoch"].append(epoch)
             history["loss_total"].append(loss.item())
             history["loss_data"].append(loss_data.item())
@@ -182,21 +182,24 @@ def run_sparsity_sweep(pde_module: PDEModule,
                        n_seeds=3,
                        output_idx=0,
                        colloc_ranges=None,
-                       callback=None):
+                       callback=None,
+                       lambda_pde=0.05):
     """
     Train both PINN and vanilla MLP at multiple data fractions.
-    Measures R² on the FULL dataset (not just training points) to evaluate
-    generalisation, not memorisation.
+    Measures R² on the FULL reference dataset, including training points.
+    This is a reconstruction benchmark, not an independent held-out test.
 
     Args:
         pde_module:   the physics domain
         data_x:       (N, input_dim) normalised input coordinates (full dataset)
         data_y:       (N, output_dim) normalised targets (full dataset)
         full_x:       same as data_x — used for evaluation
-        full_y_true:  (N,) raw (un-normalised) ground truth for R² evaluation
+        full_y_true:  (N,) ground truth in the SAME normalised output scale
+                      as data_y; RMSE is reported in that normalised scale
         fractions:    list of training data fractions, e.g. [0.05, 0.10, 0.20, 0.50, 1.0]
         output_idx:   which output dimension to evaluate R² on (0=h for fluids)
         colloc_ranges: passed to sample_collocation in train_pinn
+        lambda_pde: physics weight for the PINN; the MLP always uses zero
 
     Returns:
         dict with fractions, pinn_r2, mlp_r2, pinn_rmse, mlp_rmse,
@@ -204,6 +207,8 @@ def run_sparsity_sweep(pde_module: PDEModule,
     """
     if fractions is None:
         fractions = [0.05, 0.10, 0.20, 0.50, 1.00]
+    if any(not 0 < fraction <= 1 for fraction in fractions):
+        raise ValueError("Data fractions must be greater than zero and at most one.")
 
     results = {
         "fractions": fractions,
@@ -220,7 +225,7 @@ def run_sparsity_sweep(pde_module: PDEModule,
 
         for seed in range(n_seeds):
             rng = np.random.RandomState(seed)
-            n_train = max(10, int(N * frac))
+            n_train = min(N, max(1, int(N * frac)))
             idx = rng.choice(N, n_train, replace=False)
 
             coords_tr = data_x[idx]
@@ -231,14 +236,14 @@ def run_sparsity_sweep(pde_module: PDEModule,
             pinn = PINNEngine(pde_module, hidden=128, depth=4)
             pinn, _ = train_pinn(pinn, coords_tr, targets_tr,
                                  n_epochs=n_epochs, lr=1e-3,
-                                 lambda_pde=0.05, n_colloc=1500,
+                                 lambda_pde=lambda_pde, n_colloc=1500,
                                  colloc_ranges=colloc_ranges)
             pinn.eval()
             with torch.no_grad():
                 pred_p = pinn(full_x).numpy()[:, output_idx]
-            # pred_p is in normalised space — need to un-normalise
-            # We store normalised targets so caller must pass raw full_y_true
-            r2_p = r2_score(full_y_true, pred_p)  # NOTE: both normalised, OK for R2
+            # Both arrays must use the same normalised target scale. R² is
+            # invariant under a shared affine transformation; RMSE is not.
+            r2_p = r2_score(full_y_true, pred_p)
             rmse_p = float(np.sqrt(np.mean((full_y_true - pred_p) ** 2)))
             pinn_r2s.append(r2_p)
             pinn_rmses.append(rmse_p)

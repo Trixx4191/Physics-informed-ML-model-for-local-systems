@@ -33,10 +33,11 @@ class ElasticityPDE(PDEModule):
 
     EI * d^4v/dx^4 - q(x) = 0
     """
-    def __init__(self, EI=1.0, q0=1.0, load_type="uniform"):
+    def __init__(self, EI=1.0, q0=1.0, load_type="uniform", L=None):
         self.EI = EI
         self.q0 = q0
         self.load_type = load_type  # "uniform" or "point" (point at midspan)
+        self.L = L
 
     @property
     def name(self):
@@ -61,7 +62,10 @@ class ElasticityPDE(PDEModule):
         if self.load_type == "uniform":
             return self.q0 * torch.ones_like(x)
         else:  # smooth approximation of a point load at midspan (Gaussian)
-            return self.q0 * torch.exp(-((x - 0.0) ** 2) / 0.01) / np.sqrt(0.01 * np.pi)
+            center = 0.0 if self.L is None else self.L / 2
+            width = 0.1 if self.L is None else 0.1 * self.L
+            return (self.q0 * torch.exp(-((x - center) ** 2) / width ** 2)
+                    / (width * np.sqrt(np.pi)))
 
     def residual(self, coords, net_fn):
         v = net_fn(coords)

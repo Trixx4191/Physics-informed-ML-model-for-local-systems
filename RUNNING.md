@@ -16,6 +16,31 @@ python dash_app/app.py
 # Open http://localhost:8050
 ```
 
+The home page shows the supplied physics artwork beside the governing equations. **Open workspace** takes you to `/workspace`; this URL
+also opens the scientific dashboard directly.
+
+Workspace controls, the selected domain, and the selected tab survive refreshes
+in the same browser session. Completed training and experiment results are
+recovered from the dashboard's disk cache, and an active job continues while
+you refresh or visit the home page. A missing worker is reported as interrupted;
+refreshing never silently starts a replacement run. The workspace identifier is
+scoped to the browser tab's session storage. Cached run records expire after seven days;
+retain `DASH_CACHE_DIR` if results must survive a server/container restart.
+
+The experiments use the selected domain parameters and physics weight.
+MC Dropout trains on the selected observation fraction; the sparsity sweep uses
+its own fractions checklist. R² compares predictions with the full synthetic
+reference, including observed points. Dropout bands describe stochastic model
+spread and are not calibrated confidence intervals.
+
+The numerical path evaluates PDE derivatives and nonlinear terms in physical
+units, using a normalization adapter around standardized network inputs and
+outputs. Fluids retains its dual-head model and adaptive physics weighting;
+λ₂ supplies the initial adaptive weight, with the first 40% of epochs used for
+data warmup. Loss histories include the final epoch. Dam observations use the
+selected fraction, and gate outflow drives the downstream reference boundary
+and the model's coupling constraint.
+
 3) Run command-line experiments
 
 ```bash

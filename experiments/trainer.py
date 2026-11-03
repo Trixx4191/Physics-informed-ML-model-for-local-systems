@@ -71,7 +71,7 @@ def train_forward(train_data, river_cfg, n_epochs=3000, lr=1e-3,
         optimizer.step()
         scheduler.step()
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 or epoch == n_epochs - 1:
             history["epoch"].append(epoch)
             history["loss_total"].append(loss.item())
             history["loss_data"].append(loss_data.item())
@@ -130,7 +130,7 @@ def train_inverse(train_data, river_cfg, true_n=None,
         optimizer.step()
         scheduler.step()
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 or epoch == n_epochs - 1:
             with torch.no_grad():
                 n_inferred = model.get_n(x_eval).mean().item()
             history["epoch"].append(epoch)
@@ -225,7 +225,7 @@ def train_dam(dam_data, n_epochs=3000, lr=1e-3,
         optimizer.step()
         scheduler.step()
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 or epoch == n_epochs - 1:
             history["epoch"].append(epoch)
             history["loss_total"].append(loss.item())
             history["loss_reservoir"].append(loss_res_data.item())

@@ -8,6 +8,12 @@ A modular framework for **physics-informed neural networks (PINNs)** that recove
 
 ## Results
 
+The figures below are historical example runs. Physics normalization and solver
+corrections have since changed training and reference generation; rerun an
+experiment with its recorded parameters before comparing these values with the
+current workspace. A displayed R² measures fit to the full synthetic reference,
+including observed points, rather than held-out generalization.
+
 | Domain | Result |
 |---|---|
 | Orbital mechanics | Reconstructs a full elliptical orbit from 18% of the trajectory (R² = 0.87 on x) |
@@ -19,7 +25,12 @@ A sparsity benchmark compares each PINN with a same-size plain MLP at 5% to 100%
 
 ## Limitations
 
-The coupled Saint-Venant momentum equation does not train as well as the other domains. The paper traces this to conflicting gradients between loss terms rather than to a lack of data, and discusses it openly.
+These are synthetic reconstruction experiments, not validated engineering
+predictions. The river reference uses a finite-difference solver, and the
+point-load beam residual uses a smooth approximation to the concentrated load.
+Dropout spread is descriptive and has not been calibrated for statistical
+coverage. The paper documents an earlier training configuration; its reported
+scores and diagnosis need re-evaluation after the current correctness fixes.
 
 ## What's inside
 
@@ -41,7 +52,12 @@ python run_experiment.py --domain heat --epochs 2000
 pytest -q
 ```
 
-More options in [RUNNING.md](RUNNING.md). Domains: `fluids`, `dam`, `heat`, `wave`, `gravity`, `elasticity`.
+The home page pairs orbital artwork with the governing equations. **Open
+workspace** launches the dashboard at `/workspace`. Settings and saved results
+survive refreshes in the same browser session, including recovery of active runs.
+
+More options and cache details in [RUNNING.md](RUNNING.md). Domains: `fluids`,
+`dam`, `heat`, `wave`, `gravity`, `elasticity`, `inverse_fluids`.
 
 ## Governing equations
 

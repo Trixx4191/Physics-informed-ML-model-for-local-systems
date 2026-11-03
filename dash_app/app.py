@@ -19,7 +19,7 @@ import dash_bootstrap_components as dbc
 import numpy as np
 
 from dash_app.domain_utils import (
-    DOMAIN_INFO, generate_domain_data, train_domain,
+    DOMAIN_INFO, generate_domain_data, train_domain, prepare_domain_training_data,
     make_3d_surface_pair, make_orbit_3d, make_beam_3d, make_loss_curve_fig,
     make_dam_reservoir_fig, make_dam_reach_surface, make_n_field_fig,
     make_dam_loss_curve_fig, make_adaptive_loss_fig
@@ -29,6 +29,8 @@ from experiments.sparsity_and_uncertainty import (
 )
 from data.generator import RIVERS, generate_sparse_observations
 from dash_app.job_guard import training_slot
+from dash_app.run_state import get_run, remember_run
+from dash_app.landing import build_landing_page
 
 background_cache = diskcache.Cache(
     os.environ.get("DASH_CACHE_DIR", "/tmp/pinn-dash-cache")
@@ -49,10 +51,22 @@ def healthz():
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
+PARAM_DEFAULTS = {
+    "param-river": "volta", "param-alpha": 0.05, "param-c": 1.0,
+    "param-mode": 1, "param-e": 0.3, "param-load": "uniform",
+    "param-n": 0.035, "param-s0": 0.0008, "param-GM": 1.0,
+    "param-EI": 1.0, "param-L": 1.0, "param-q0": 1.0,
+    "param-gate-width": 10.0, "param-res-area": 1000000.0,
+    "param-true-n": 0.035,
+}
+
+
 def control_field(label, component, *, wide=False):
     """A compact labelled control, shared by the toolbar and experiments."""
     if isinstance(component, dcc.Slider):
         component.tooltip = {"placement": "bottom", "always_visible": False}
+    component.persistence = True
+    component.persistence_type = "session"
     return html.Div([
         html.Label(label, htmlFor=component.id, className="control-label"),
         component,
@@ -125,10 +139,11 @@ experiment_controls = html.Div([
     ], className="experiment-section"),
 ], className="experiment-controls")
 
-app.layout = html.Div([
+workspace_layout = html.Div([
     html.Header([
         html.H1("PINN Multi-Physics Explorer"),
         html.Span("Scientific workspace · 7 domains"),
+        dcc.Link("← Home", href="/", refresh=False, className="workspace-home"),
     ], className="workspace-header"),
     control_bar,
     html.Div(id="equation-display", className="equation-strip"),
@@ -136,11 +151,15 @@ app.layout = html.Div([
         dbc.Tabs([
             dbc.Tab(label="Solution", tab_id="solution"),
             dbc.Tab(label="Experiments", tab_id="experiments"),
-        ], id="workspace-tabs", active_tab="solution", className="workspace-tabs"),
+        ], id="workspace-tabs", active_tab="solution", className="workspace-tabs",
+           persistence=True, persistence_type="session"),
         # Keep both panels mounted: switching tabs must preserve controls,
         # figures, and the targets of in-flight background callbacks.
         html.Section([
-            dcc.Loading(id="loading-train", type="circle", children=html.Div(
+            html.Div(id="run-context", className="run-context"),
+            # Progress and disabled run buttons show job activity. A Loading
+            # wrapper here would hide saved figures on every recovery poll.
+            html.Div(id="loading-train", children=html.Div(
                 id="results-area", children=html.Div([
                     html.H2("Solution workspace", className="section-title"),
                     html.P("Choose a domain and training parameters, then train a PINN "
@@ -149,29 +168,107 @@ app.layout = html.Div([
         ], id="solution-panel"),
         html.Section([
             experiment_controls,
-            dcc.Loading(id="loading-experiments", type="dot",
+            html.Div(id="experiment-status", className="experiment-status", role="status",
+                     **{"aria-live": "polite"}),
+            html.Div(id="loading-experiments",
                         children=html.Div(id="experiment-results-area")),
         ], id="experiments-panel", style={"display": "none"}),
     ], className="workspace-main"),
     # Dynamic controls write into permanent stores so background callbacks
     # can safely read their values even when another domain is selected.
-    dcc.Store(id="param-river-store", data="volta"),
-    dcc.Store(id="param-alpha-store", data=0.05),
-    dcc.Store(id="param-c-store", data=1.0),
-    dcc.Store(id="param-mode-store", data=1),
-    dcc.Store(id="param-e-store", data=0.3),
-    dcc.Store(id="param-load-store", data="uniform"),
-    dcc.Store(id="param-n-store", data=0.035),
-    dcc.Store(id="param-s0-store", data=0.0008),
-    dcc.Store(id="param-GM-store", data=1.0),
-    dcc.Store(id="param-EI-store", data=1.0),
-    dcc.Store(id="param-L-store", data=1.0),
-    dcc.Store(id="param-q0-store", data=1.0),
-    dcc.Store(id="param-gate-width-store", data=10.0),
-    dcc.Store(id="param-res-area-store", data=1000000.0),
-    dcc.Store(id="param-true-n-store", data=0.035),
+    *[dcc.Store(id=f"{param}-store", data=value, storage_type="session")
+      for param, value in PARAM_DEFAULTS.items()],
     dcc.Store(id="trained-results-store"),
-], className="laboratory-workspace")
+], id="workspace-page", className="laboratory-workspace", style={"display": "none"})
+
+app.layout = html.Div([
+    dcc.Location(id="page-location", refresh=False),
+    build_landing_page(),
+    workspace_layout,
+    dcc.Store(id="workspace-id", storage_type="session"),
+    dcc.Interval(id="run-recovery", interval=1000, disabled=True),
+])
+
+
+app.clientside_callback(
+    """function(_, current) {
+        if (current) return window.dash_clientside.no_update;
+        if (window.crypto.randomUUID) return window.crypto.randomUUID();
+        return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
+            (c ^ window.crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
+    }""",
+    Output("workspace-id", "data"), Input("page-location", "pathname"),
+    State("workspace-id", "data"),
+)
+
+
+@app.callback(
+    Output("landing-page", "style"), Output("workspace-page", "style"),
+    Output("run-recovery", "disabled"), Input("page-location", "pathname"),
+)
+def show_page(pathname):
+    if (pathname or "/").rstrip("/") == "/workspace":
+        return {"display": "none"}, {"display": "block"}, False
+    return {"display": "block"}, {"display": "none"}, True
+
+
+@app.callback(
+    Output("results-area", "children", allow_duplicate=True),
+    Output("train-status", "children", allow_duplicate=True),
+    Output("train-progress", "children", allow_duplicate=True),
+    Output("experiment-results-area", "children", allow_duplicate=True),
+    Output("experiment-status", "children"),
+    Output("train-btn", "disabled", allow_duplicate=True),
+    Output("sparsity-btn", "disabled", allow_duplicate=True),
+    Output("mcdrop-btn", "disabled", allow_duplicate=True),
+    Output("trained-results-store", "data"),
+    Output("run-context", "children"),
+    Input("run-recovery", "n_intervals"), Input("workspace-id", "data"),
+    State("trained-results-store", "data"),
+    prevent_initial_call=True,
+)
+def recover_runs(_ticks, workspace_id, revisions):
+    """Reattach to this browser session's job records after navigation/reload."""
+    records = {kind: get_run(background_cache, kind, workspace_id)
+               for kind in ("training", "experiment")}
+    revisions = dict(revisions or {})
+    results = status = progress = experiments = experiment_status = context = dash.no_update
+    changed = False
+    for kind, record in records.items():
+        if not record:
+            continue
+        revision = [record["id"], record["updated"], record["state"]]
+        if revisions.get(kind) == revision:
+            continue
+        changed = True
+        revisions[kind] = revision
+        state = record["state"]
+        label = DOMAIN_INFO.get(record.get("domain_key"), {}).get("label", "Run")
+        if kind == "training":
+            if state == "running":
+                status = f"Training · {label}"
+                progress = record.get("progress", "Starting run…")
+            elif record.get("result") is not None:
+                results, status = record["result"]
+                progress = "" if state == "completed" else record.get("progress", "")
+                result_label = DOMAIN_INFO.get(record.get("result_domain_key", record.get("domain_key")), {}).get("label", label)
+                settings = record.get("result_inputs", record.get("inputs", {}))
+                context = (f"Last solution · {result_label} · {settings.get('epochs', '—')} epochs · "
+                           f"{settings.get('fraction_pct', '—')}% observations")
+            else:
+                status = record.get("progress", "Run interrupted. Start a new run.")
+                progress = ""
+            if state == "interrupted":
+                status = "Run interrupted. Start a new run to continue."
+        else:
+            if state != "running" and record.get("result") is not None:
+                experiments = record["result"]
+            verb = {"running": "Running experiment", "completed": "Experiment complete",
+                    "failed": "Experiment failed", "interrupted": "Experiment interrupted"}[state]
+            experiment_status = f"{verb} · {label}"
+    busy = any(record and record["state"] == "running" for record in records.values())
+    return (results, status, progress, experiments, experiment_status,
+            busy, busy, busy, revisions if changed else dash.no_update, context)
 
 
 @app.callback(
@@ -186,8 +283,22 @@ def switch_workspace(active_tab):
 
 # ── Dynamic per-domain parameter controls ───────────────────────────────────────
 
-@app.callback(Output("domain-params", "children"), Input("domain-select", "value"))
-def render_domain_params(domain_key):
+@app.callback(
+    Output("domain-params", "children"), Input("domain-select", "value"),
+    *[State(f"{param}-store", "data") for param in PARAM_DEFAULTS],
+)
+def render_domain_params(domain_key, *saved_values):
+    controls = domain_controls(domain_key)
+    values = dict(zip(PARAM_DEFAULTS, saved_values))
+    for field in controls.children or []:
+        component = field.children[1]
+        value = values.get(component.id)
+        if value is not None:
+            component.value = value
+    return controls
+
+
+def domain_controls(domain_key):
     if domain_key == "fluids":
         river_options = [{"label": v["name"], "value": k}
                          for k, v in RIVERS.items() if k != "dam"]
@@ -270,6 +381,7 @@ def show_equation(domain_key):
         "dam": "Adjust gate geometry and reservoir storage for better operational realism.",
         "inverse_fluids": "River (sets true n, hidden from the model). "
                           "The PINN infers n(x) from sparse observations and the physics residual.",
+        "elasticity": "Point-load physics uses a smooth approximation of the load at midspan.",
     }
     return html.Div([
         html.Div([
@@ -306,16 +418,18 @@ def show_equation(domain_key):
     State("param-gate-width-store", "data"),
     State("param-res-area-store", "data"),
     State("param-true-n-store", "data"),
+    State("workspace-id", "data"),
     prevent_initial_call=True,
     background=True,
     progress=Output("train-progress", "children"),
     progress_default="",
     running=[(Output("train-btn", "disabled"), True, False)],
 )
+@remember_run(background_cache, "training", progress=True)
 def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambda_pde,
                  river_key, alpha_val, c_val, mode_val, e_val, load_val,
                  n_val, s0_val, GM_val, EI_val, L_val, q0_val,
-                 gate_width_val, res_area_val, true_n_val):
+                 gate_width_val, res_area_val, true_n_val, workspace_id=None):
     with training_slot(background_cache.directory) as acquired:
         if not acquired:
             return dash.no_update, "Another training or experiment job is running. Please try again when it finishes."
@@ -373,10 +487,11 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                     dbc.Alert([
                         html.Strong("Architecture: "),
                         "Dual-head PINN (separate h and u decoders) + Wang et al. 2021 "
-                        "adaptive λ weighting. Physics constraint improves physical "
-                        "consistency and extrapolation accuracy. For interpolation, the "
-                        f"data-only ceiling for h is R²≈0.47 — physics regularisation "
-                        "trades some interpolation accuracy for guaranteed physical consistency."
+                        "adaptive λ weighting. Physics residuals are evaluated in physical "
+                        "coordinates while the network trains on standardized observations. "
+                        "λ₂ initializes the adaptive weight; the final weight is learned. "
+                        "R² measures fit to the synthetic reference, including observed points; "
+                        "it is not a held-out accuracy or a guarantee of physical consistency."
                     ], color="info", className="domain-note"),
                 ], className="solution-results")
                 return content, f"Trained on {data['cfg']['name']} — {epochs} epochs"
@@ -435,7 +550,8 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                 return content, f"Wave equation trained — {epochs} epochs"
 
             if domain_key == "gravity":
-                data = generate_domain_data("gravity", eccentricity=e_val or 0.3, GM=GM_val or 1.0)
+                data = generate_domain_data("gravity", eccentricity=0.3 if e_val is None else e_val,
+                                            GM=GM_val or 1.0)
                 model, hist, stats, extra = train_domain(
                     "gravity", data, fraction=fraction, n_epochs=epochs, lambda_pde=lambda_pde,
                     n_colloc=DASH_COLLOCATION_POINTS, callback=report_progress)
@@ -502,7 +618,11 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
 
                 content = html.Div([
                     metric_row([("Reservoir level R²", f"{extra['r2_z']:.4f}"),
-                               ("Time steps", extra["n_train"]),
+                               ("Training pts", extra["n_train"]),
+                               ("Reservoir / reach pts",
+                                f"{extra.get('n_res_train', extra['n_train'])} / "
+                                f"{extra.get('n_reach_train', '—')}"),
+                               ("Channel width", f"{data['cfg'].get('channel_width', 30.0):g} m"),
                                ("Reservoir area", f"{data['cfg']['reservoir_area']:.0e} m²")]),
                     html.Div([
                         html.Div([
@@ -540,11 +660,10 @@ def run_training(set_progress, n_clicks, domain_key, fraction_pct, epochs, lambd
                         dcc.Graph(figure=make_loss_curve_fig(hist)),
                     ], className="loss-panel"),
                     dbc.Alert(
-                        "Note: roughness inference accuracy is currently capped "
-                        "by the same forward-fit ceiling affecting the base "
-                        "fluids domain on this flood-wave signal — see project "
-                        "notes. Treat the error % as a diagnostic, not a final "
-                        "result, until the forward capacity issue is resolved.",
+                        "Note: roughness inference depends on the forward flow fit and on "
+                        "how well sparse observations identify n(x). Treat the error % as a "
+                        "synthetic-reference diagnostic; it is not a validated estimate of "
+                        "real river roughness or a calibrated uncertainty bound.",
                         color="warning", className="domain-note"
                     ),
                 ], className="solution-results")
@@ -566,103 +685,17 @@ def metric_row(pairs):
     ], className="metric-row")
 
 
-# ── Sync dynamic per-domain controls into hidden stores ─────────────────────────
-# Dash cannot bind a State/Input directly to a component that is created
-# dynamically inside another callback's output -- it may not exist in the
-# DOM yet, which raises a "nonexistent object" error unless callback
-# exceptions are suppressed (set below). The fix is the standard Dash
-# pattern: each dynamic control writes into a permanent, always-present
-# dcc.Store, and the training callback reads from the stores instead of
-# binding to the dynamic controls directly.
-
-@app.callback(Output("param-river-store", "data"),
-              Input("param-river", "value"), prevent_initial_call=True)
-def sync_river(v):
-    return v
-
-
-@app.callback(Output("param-alpha-store", "data"),
-              Input("param-alpha", "value"), prevent_initial_call=True)
-def sync_alpha(v):
-    return v
-
-
-@app.callback(Output("param-c-store", "data"),
-              Input("param-c", "value"), prevent_initial_call=True)
-def sync_c(v):
-    return v
-
-
-@app.callback(Output("param-mode-store", "data"),
-              Input("param-mode", "value"), prevent_initial_call=True)
-def sync_mode(v):
-    return v
-
-
-@app.callback(Output("param-e-store", "data"),
-              Input("param-e", "value"), prevent_initial_call=True)
-def sync_e(v):
-    return v
-
-
-@app.callback(Output("param-load-store", "data"),
-              Input("param-load", "value"), prevent_initial_call=True)
-def sync_load(v):
-    return v
-
-
-@app.callback(Output("param-n-store", "data"),
-              Input("param-n", "value"), prevent_initial_call=True)
-def sync_n(v):
-    return v
-
-
-@app.callback(Output("param-s0-store", "data"),
-              Input("param-s0", "value"), prevent_initial_call=True)
-def sync_s0(v):
-    return v
-
-
-@app.callback(Output("param-GM-store", "data"),
-              Input("param-GM", "value"), prevent_initial_call=True)
-def sync_GM(v):
-    return v
-
-
-@app.callback(Output("param-EI-store", "data"),
-              Input("param-EI", "value"), prevent_initial_call=True)
-def sync_EI(v):
-    return v
-
-
-@app.callback(Output("param-L-store", "data"),
-              Input("param-L", "value"), prevent_initial_call=True)
-def sync_L(v):
-    return v
-
-
-@app.callback(Output("param-q0-store", "data"),
-              Input("param-q0", "value"), prevent_initial_call=True)
-def sync_q0(v):
-    return v
-
-
-@app.callback(Output("param-gate-width-store", "data"),
-              Input("param-gate-width", "value"), prevent_initial_call=True)
-def sync_gate_width(v):
-    return v
-
-
-@app.callback(Output("param-res-area-store", "data"),
-              Input("param-res-area", "value"), prevent_initial_call=True)
-def sync_res_area(v):
-    return v
-
-
-@app.callback(Output("param-true-n-store", "data"),
-              Input("param-true-n", "value"), prevent_initial_call=True)
-def sync_true_n(v):
-    return v
+# ── Sync controls locally before a training click reads their stores ────────────
+# Avoid a server round trip: changing a value and immediately pressing Train
+# must submit that value, including zero eccentricity.
+for param in PARAM_DEFAULTS:
+    app.clientside_callback(
+        """function(value) {
+            return value == null ? window.dash_clientside.no_update : value;
+        }""",
+        Output(f"{param}-store", "data"), Input(param, "value"),
+        prevent_initial_call=True,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -682,6 +715,11 @@ def sync_true_n(v):
     State("param-river-store", "data"),
     State("param-n-store", "data"),
     State("param-s0-store", "data"),
+    *[State(f"{param}-store", "data") for param in (
+        "param-alpha", "param-c", "param-mode", "param-e", "param-GM",
+        "param-load", "param-EI", "param-L", "param-q0")],
+    State("data-fraction", "value"), State("lambda-pde", "value"),
+    State("workspace-id", "data"),
     prevent_initial_call=True,
     background=True,
     running=[
@@ -689,9 +727,13 @@ def sync_true_n(v):
         (Output("mcdrop-btn", "disabled"), True, False),
     ],
 )
+@remember_run(background_cache, "experiment")
 def run_experiment(sparsity_clicks, mcdrop_clicks,
                    domain_key, fractions, n_seeds, n_epochs,
-                   dropout_p, mc_samples, river_key, n_val, s0_val):
+                   dropout_p, mc_samples, river_key, n_val, s0_val,
+                   alpha_val=0.05, c_val=1.0, mode_val=1, e_val=0.3, GM_val=1.0,
+                   load_val="uniform", EI_val=1.0, L_val=1.0, q0_val=1.0,
+                   fraction_pct=15, lambda_pde=0.1, workspace_id=None):
     """Single callback handles both experiment buttons via callback_context."""
     with training_slot(background_cache.directory) as acquired:
         if not acquired:
@@ -706,90 +748,26 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
 
         triggered_id = callback_context.triggered[0]["prop_id"].split(".")[0]
 
-        # ── shared: generate domain data ─────────────────────────────────────────
+        # Use the same selected physical parameters and normalization as the
+        # solution run, then evaluate both experiments on the full reference.
+        if domain_key not in {"fluids", "heat", "wave", "gravity", "elasticity"}:
+            return dbc.Alert(
+                f"Sparsity sweep and MC Dropout not yet configured for '{domain_key}'. "
+                "Select fluids, heat, wave, gravity, or elasticity.", color="warning")
+        parameters = {
+            "fluids": dict(river_key=river_key or "volta", n_manning=n_val, S0=s0_val),
+            "heat": dict(alpha=alpha_val),
+            "wave": dict(c=c_val, mode=mode_val),
+            "gravity": dict(eccentricity=e_val, GM=GM_val),
+            "elasticity": dict(load_type=load_val, EI=EI_val, L=L_val, q0=q0_val),
+        }
         try:
-            if domain_key == "fluids":
-                data = generate_domain_data("fluids", river_key=river_key or "volta",
-                                            n_manning=n_val, S0=s0_val)
-                from domains.fluids import FluidsPDE
-                pde = FluidsPDE(S0=data["cfg"]["S0"], n_manning=data["cfg"]["n_manning"])
-                x_m, x_s = data["X"].mean(), data["X"].std()
-                t_m, t_s = data["T"].mean(), data["T"].std()
-                h_m, h_s = data["H"].mean(), data["H"].std()
-                u_m, u_s = data["U"].mean(), data["U"].std()
-                all_coords = torch.tensor(
-                    np.stack([(data["X"]-x_m)/x_s, (data["T"]-t_m)/t_s], axis=1),
-                    dtype=torch.float32)
-                all_targets = torch.tensor(
-                    np.stack([(data["H"]-h_m)/h_s, (data["U"]-u_m)/u_s], axis=1),
-                    dtype=torch.float32)
-                full_y_true = (all_targets[:, 0].numpy())  # normalised h for R2
-                domain_label = data["cfg"]["name"]
-                colloc_ranges = None
-                output_idx = 0
-
-            elif domain_key == "heat":
-                from domains.heat import HeatPDE, solve_heat_analytical
-                alpha = 0.05
-                x = np.linspace(0, 1, 50); t = np.linspace(0, 2, 50)
-                T_field = solve_heat_analytical(x, t, alpha=alpha, T0=100.0)
-                xx, tt = np.meshgrid(x, t)
-                X, Tt, Y = xx.ravel(), tt.ravel(), T_field.ravel()
-                x_m,x_s = X.mean(),X.std(); t_m,t_s = Tt.mean(),Tt.std()
-                y_m,y_s = Y.mean(),Y.std()+1e-8
-                all_coords = torch.tensor(
-                    np.stack([(X-x_m)/x_s,(Tt-t_m)/t_s],axis=1),dtype=torch.float32)
-                all_targets = torch.tensor(
-                    ((Y-y_m)/y_s).reshape(-1,1),dtype=torch.float32)
-                pde = HeatPDE(alpha=alpha)
-                full_y_true = all_targets[:,0].numpy()
-                domain_label = "Heat diffusion"; colloc_ranges = None; output_idx = 0
-
-            elif domain_key == "wave":
-                from domains.wave import WavePDE, solve_wave_analytical
-                x = np.linspace(0,1,50); t = np.linspace(0,2,50)
-                U_field = solve_wave_analytical(x,t,c=1.0,mode=1,amplitude=1.0)
-                xx,tt = np.meshgrid(x,t)
-                X,Tt,Y = xx.ravel(),tt.ravel(),U_field.ravel()
-                x_m,x_s=X.mean(),X.std(); t_m,t_s=Tt.mean(),Tt.std()
-                y_m,y_s=Y.mean(),Y.std()+1e-8
-                all_coords = torch.tensor(
-                    np.stack([(X-x_m)/x_s,(Tt-t_m)/t_s],axis=1),dtype=torch.float32)
-                all_targets = torch.tensor(
-                    ((Y-y_m)/y_s).reshape(-1,1),dtype=torch.float32)
-                pde = WavePDE(c=1.0)
-                full_y_true = all_targets[:,0].numpy()
-                domain_label = "Wave propagation"; colloc_ranges = None; output_idx = 0
-
-            elif domain_key == "gravity":
-                from domains.gravity import GravityPDE, generate_orbit_data
-                t,x,y,period = generate_orbit_data(GM=1.0,a=1.0,e=0.3,n_points=200,n_periods=1)
-                t_m,t_s = t.mean(),t.std()
-                x_m,x_s = x.mean(),x.std(); y_m,y_s = y.mean(),y.std()
-                all_coords = torch.tensor(((t-t_m)/t_s).reshape(-1,1),dtype=torch.float32)
-                all_targets = torch.tensor(
-                    np.stack([(x-x_m)/x_s,(y-y_m)/y_s],axis=1),dtype=torch.float32)
-                pde = GravityPDE(GM=1.0)
-                full_y_true = all_targets[:,0].numpy()
-                domain_label = "Orbital mechanics"; colloc_ranges=[(-2,2)]; output_idx=0
-
-            elif domain_key == "elasticity":
-                from domains.elasticity import ElasticityPDE, solve_beam_analytical
-                x = np.linspace(0,1,100)
-                v = solve_beam_analytical(x,L=1.0,EI=1.0,q0=1.0)
-                x_m,x_s = x.mean(),x.std(); v_m,v_s = v.mean(),v.std()+1e-8
-                all_coords = torch.tensor(((x-x_m)/x_s).reshape(-1,1),dtype=torch.float32)
-                all_targets = torch.tensor(((v-v_m)/v_s).reshape(-1,1),dtype=torch.float32)
-                pde = ElasticityPDE(EI=1.0,q0=1.0)
-                full_y_true = all_targets[:,0].numpy()
-                domain_label = "Beam elasticity"; colloc_ranges=[(-2,2)]; output_idx=0
-
-            else:
-                return dbc.Alert(
-                    f"Sparsity sweep and MC Dropout not yet configured for '{domain_key}'. "
-                    "Select fluids, heat, wave, gravity, or elasticity.",
-                    color="warning")
-
+            data = generate_domain_data(domain_key, **parameters[domain_key])
+            pde, all_coords, all_targets, _stats, colloc_ranges = prepare_domain_training_data(
+                domain_key, data)
+            output_idx = 0
+            full_y_true = all_targets[:, output_idx].numpy()
+            domain_label = data.get("cfg", {}).get("name", DOMAIN_INFO[domain_key]["label"])
         except Exception as e:
             return dbc.Alert(f"Data generation error: {e}", color="danger")
 
@@ -797,7 +775,9 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
         # SPARSITY SWEEP
         # ─────────────────────────────────────────────────────────────────────────
         if triggered_id == "sparsity-btn":
-            fracs = sorted(fractions or [0.05, 0.10, 0.20, 0.50, 1.00])
+            if not fractions:
+                return dbc.Alert("Choose at least one data fraction to test.", color="warning")
+            fracs = sorted(fractions)
             try:
                 results = run_sparsity_sweep(
                     pde, all_coords, all_targets,
@@ -807,6 +787,7 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
                     n_seeds=n_seeds or 2,
                     output_idx=output_idx,
                     colloc_ranges=colloc_ranges,
+                    lambda_pde=lambda_pde,
                 )
             except Exception as e:
                 return dbc.Alert(f"Sweep error: {e}", color="danger")
@@ -872,13 +853,11 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
                 legend=dict(orientation="h", y=1.12),
             )
 
-            # Find crossover
-            crossover_msg = ""
-            for i, (p, m) in enumerate(zip(results["pinn_r2"], results["mlp_r2"])):
-                if p > m:
-                    crossover_msg = (f"PINN outperforms vanilla MLP at "
-                                     f"{frac_pct[i]:.0f}% data and below.")
-                    break
+            winning_fractions = [f"{fraction:.0f}%" for fraction, pinn, mlp
+                                 in zip(frac_pct, results["pinn_r2"], results["mlp_r2"])
+                                 if pinn > mlp]
+            crossover_msg = ("Higher mean PINN R² at tested fractions: " + ", ".join(winning_fractions)
+                             if winning_fractions else "No PINN advantage detected at tested fractions.")
 
             import pandas as pd
             df = pd.DataFrame({
@@ -893,8 +872,9 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
 
             return html.Div([
                 html.H5("Sparsity sweep — PINN vs vanilla MLP", className="mt-3"),
-                dbc.Alert(crossover_msg or "No PINN advantage detected at tested fractions.",
-                          color="success" if crossover_msg else "warning",
+                dbc.Alert(crossover_msg + " Scores compare against the full synthetic reference, "
+                          "including training points; they are not held-out generalization scores.",
+                          color="success" if winning_fractions else "warning",
                           className="small"),
                 dcc.Graph(figure=fig),
                 dcc.Graph(figure=fig2),
@@ -908,10 +888,12 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
         # ─────────────────────────────────────────────────────────────────────────
         elif triggered_id == "mcdrop-btn":
             try:
+                n_train = max(1, int(len(all_coords) * fraction_pct / 100))
+                train_idx = np.random.RandomState(0).choice(len(all_coords), n_train, replace=False)
                 mc_model, hist_mc = train_mc_dropout(
-                    pde, all_coords, all_targets,
+                    pde, all_coords[train_idx], all_targets[train_idx],
                     n_epochs=min(n_epochs, 1500),
-                    lr=1e-3, lambda_pde=0.05,
+                    lr=1e-3, lambda_pde=lambda_pde,
                     n_colloc=1500, colloc_ranges=colloc_ranges,
                     dropout_p=dropout_p or 0.08,
                 )
@@ -947,12 +929,12 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
                     x=np.concatenate([x_s_arr, x_s_arr[::-1]]),
                     y=np.concatenate([y_m_s+2*y_std_s, (y_m_s-2*y_std_s)[::-1]]),
                     fill="toself", fillcolor="rgba(83,74,183,0.18)",
-                    line=dict(color="rgba(255,255,255,0)"), name="95% CI"))
+                    line=dict(color="rgba(255,255,255,0)"), name="±2σ dropout spread"))
                 fig_mc.add_trace(go.Scatter(
                     x=np.concatenate([x_s_arr, x_s_arr[::-1]]),
                     y=np.concatenate([y_m_s+y_std_s, (y_m_s-y_std_s)[::-1]]),
                     fill="toself", fillcolor="rgba(83,74,183,0.30)",
-                    line=dict(color="rgba(255,255,255,0)"), name="68% CI"))
+                    line=dict(color="rgba(255,255,255,0)"), name="±1σ dropout spread"))
                 fig_mc.update_layout(
                     title=f"MC Dropout uncertainty — {domain_label} "
                           f"({int(mc_samples)} samples, p={dropout_p})",
@@ -972,14 +954,14 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
 
                 y_std_grid = y_std[:n_t*n_x].reshape(n_t, n_x)
                 fig_mc = go.Figure(data=[go.Surface(
-                    z=y_std_grid * 2,   # 95% CI width
+                    z=y_std_grid * 4,   # Full width of the mean ±2σ band
                     colorscale="Oranges", showscale=True,
                     contours=dict(z=dict(show=True, usecolormap=True, project_z=True))
                 )])
                 fig_mc.update_layout(
                     scene=dict(
                         xaxis_title="x", yaxis_title="t",
-                        zaxis_title="95% CI width",
+                        zaxis_title="±2σ spread width",
                         camera=dict(eye=dict(x=1.6, y=-1.6, z=0.9)),
                     ),
                     title=f"Epistemic uncertainty — {domain_label} "
@@ -990,13 +972,13 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
 
             # Uncertainty width histogram
             fig_hist = go.Figure(data=[go.Histogram(
-                x=y_std * 2, nbinsx=40,
+                x=y_std * 4, nbinsx=40,
                 marker_color="#EF9F27", opacity=0.8,
-                name="95% CI width distribution"
+                name="±2σ spread width distribution"
             )])
             fig_hist.update_layout(
-                title="Distribution of 95% confidence interval widths",
-                xaxis_title="95% CI width (normalised units)",
+                title="Distribution of dropout spread widths (mean ±2σ)",
+                xaxis_title="Full ±2σ width (normalised units)",
                 yaxis_title="Count", height=280,
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             )
@@ -1004,7 +986,7 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
             # Loss curve
             fig_loss = make_loss_curve_fig(hist_mc)
 
-            mean_ci = float(y_std.mean() * 2)
+            mean_ci = float(y_std.mean() * 4)
             mean_r2 = float(1 - np.mean((y_true - y_mean)**2) /
                             (np.var(y_true) + 1e-8))
 
@@ -1012,15 +994,17 @@ def run_experiment(sparsity_clicks, mcdrop_clicks,
                 html.H5("MC Dropout uncertainty quantification", className="mt-3"),
                 metric_row([
                     ("MC mean R²", f"{mean_r2:.4f}"),
-                    ("Mean 95% CI width", f"{mean_ci:.4f}"),
+                    ("Mean ±2σ width", f"{mean_ci:.4f}"),
                     ("MC samples", int(mc_samples)),
                     ("Dropout p", dropout_p),
+                    ("Training pts", n_train),
                 ]),
                 dbc.Alert(
-                    "Wider bands = higher epistemic uncertainty = where additional "
-                    "sensors or training data would most improve predictions. "
-                    "This is directly actionable for sensor network planning. "
-                    "Citation: Gal & Ghahramani, ICML 2016.",
+                    "Dropout spread describes variability across stochastic model predictions. "
+                    "The ±1σ and ±2σ bands are descriptive, not calibrated confidence intervals; "
+                    "they do not establish coverage or guarantee the best sensor locations. "
+                    "R² compares with the full synthetic reference, including training points. "
+                    "Method: Gal & Ghahramani, ICML 2016.",
                     color="info", className="small"
                 ),
                 dcc.Graph(figure=fig_mc),
