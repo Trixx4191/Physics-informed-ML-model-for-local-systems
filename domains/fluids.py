@@ -93,11 +93,14 @@ class InverseFluidsPDE(PDEModule):
     via get_n() for the engine/UI to query and plot separately from the
     main h, u outputs.
     """
-    def __init__(self, g=9.81, S0=0.001, n_min=0.01, n_max=0.15):
+    def __init__(self, g=9.81, S0=0.001, n_min=0.01, n_max=0.15,
+                 x_mean=0.0, x_std=1.0):
         self.g = g
         self.S0 = S0
         self.n_min = n_min
         self.n_max = n_max
+        self.x_mean = x_mean
+        self.x_std = x_std
         # Small separate network for n(x) — owned here, not by PINNEngine,
         # since PINNEngine.net only models the (h,u) outputs declared by
         # output_dim. The training loop must add this module's parameters
@@ -135,7 +138,7 @@ class InverseFluidsPDE(PDEModule):
         out = net_fn(coords)
         h, u = out[:, 0:1], out[:, 1:2]
 
-        x_col = coords[:, 0:1]
+        x_col = (coords[:, 0:1] - self.x_mean) / self.x_std
         n = self.get_n(x_col)
 
         dh = torch.autograd.grad(h.sum(), coords, create_graph=True)[0]
@@ -170,34 +173,20 @@ class InverseFluidsPDE(PDEModule):
 
 class DualHeadFluidsPINN(nn.Module):
     """
-    Industry-grade fluids PINN with separate output heads for h and u.
+    Shared encoder with separate depth and velocity output heads.
 
-    WHY THIS ARCHITECTURE:
-    The diagnosis showed that a shared-trunk network fitting (h, u)
-    jointly as two outputs plateaus at R²~0.37 — not because the signal
-    is unlearnable (h alone reaches R²=0.995 with a plain MLP) but because
-    the Saint-Venant momentum residual creates gradient conflict: improving
-    h and satisfying ∂(uh)/∂t + ... = 0 simultaneously requires opposing
-    gradient directions in a single shared output layer.
+    Saint-Venant residuals couple both heads during training. An optional
+    NormalizedPDE supplies physical-unit residuals and an output transform
+    that allows negative standardized depth while keeping physical depth
+    positive. Without it, the original direct physical-output API applies.
 
-    Solution: shared encoder trunk (captures common (x,t) → feature mapping)
-    + separate decoder heads for h and u. The physics residual still couples
-    both heads (Saint-Venant involves both h and u in every term), but the
-    per-output gradient conflict in the final layer is eliminated.
-
-    This is structurally equivalent to multi-task learning with task-specific
-    heads — standard practice in production ML systems where outputs have
-    different scales, frequencies, and loss landscapes.
-
-    COMBINES WITH:
-    train_pinn_adaptive() for self-calibrating λ — cite both:
-    - Wang et al. 2021 (adaptive weighting)
-    - Mishra & Molinaro 2022 (error estimates for PINN multi-task systems)
+    train_pinn_adaptive() balances the data and physics gradients; measured
+    reconstruction quality depends on the data, parameters, and run length.
     """
     def __init__(self, hidden=128, depth=5, head_depth=2,
-                 g=9.81, S0=0.001, n_manning=0.03):
+                 g=9.81, S0=0.001, n_manning=0.03, pde_module=None):
         super().__init__()
-        self.pde_module = FluidsPDE(g=g, S0=S0, n_manning=n_manning)
+        self.pde_module = pde_module or FluidsPDE(g=g, S0=S0, n_manning=n_manning)
 
         # Shared trunk: (x,t) → feature vector
         trunk_layers = [nn.Linear(2, hidden), nn.Tanh()]
@@ -226,9 +215,8 @@ class DualHeadFluidsPINN(nn.Module):
 
     def forward(self, coords):
         features = self.trunk(coords)
-        h = torch.nn.functional.softplus(self.h_head(features))
-        u = self.u_head(features)
-        return torch.cat([h, u], dim=1)
+        raw = torch.cat([self.h_head(features), self.u_head(features)], dim=1)
+        return self.pde_module.transform_output(raw)
 
     def pde_residual(self, coords):
         """

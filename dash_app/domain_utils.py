@@ -18,7 +18,7 @@ import torch
 import plotly.graph_objects as go
 from sklearn.metrics import r2_score
 
-from core.pde_module import PINNEngine, train_pinn, train_pinn_with_extra_params, train_pinn_adaptive, sample_collocation
+from core.pde_module import NormalizedPDE, PINNEngine, train_pinn, train_pinn_with_extra_params, train_pinn_adaptive, sample_collocation
 from domains.fluids import FluidsPDE, InverseFluidsPDE, DualHeadFluidsPINN
 from domains.heat import HeatPDE, solve_heat_analytical
 from domains.wave import WavePDE, solve_wave_analytical
@@ -176,6 +176,91 @@ def generate_domain_data(domain_key, river_key="volta", **kwargs):
 # Training dispatch — builds the right PDEModule + sparse split + trains
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def prepare_domain_training_data(domain_key, data):
+    """Prepare a consistent physical model for solutions and experiments.
+
+    Returns ``pde``, standardized ``coords`` / ``targets``, plotting ``stats``,
+    and full-domain ``colloc_ranges``. The PDE adapter evaluates derivatives
+    and nonlinear terms in physical units; characteristic residual scales
+    precondition the loss. Dam owns a separate composite training path.
+    """
+    if domain_key in ("fluids", "inverse_fluids"):
+        coordinates = np.column_stack([data["X"], data["T"]])
+        targets = np.column_stack([data["H"], data["U"]])
+        input_names, output_names = ("x", "t"), ("h", "u")
+    elif domain_key in ("heat", "wave"):
+        coordinates = np.column_stack([data["X"], data["Tt"]])
+        targets = data["Y"].reshape(-1, 1)
+        input_names, output_names = ("x", "t"), ("y",)
+    elif domain_key == "gravity":
+        coordinates = data["t"].reshape(-1, 1)
+        targets = np.column_stack([data["x"], data["y"]])
+        input_names, output_names = ("t",), ("x", "y")
+    elif domain_key == "elasticity":
+        coordinates = data["x"].reshape(-1, 1)
+        targets = data["v"].reshape(-1, 1)
+        input_names, output_names = ("x",), ("v",)
+    else:
+        raise ValueError(f"No single-PDE training preparation for domain: {domain_key}")
+
+    input_mean, input_std = coordinates.mean(axis=0), coordinates.std(axis=0)
+    output_mean, output_std = targets.mean(axis=0), targets.std(axis=0)
+    input_std = np.maximum(input_std, 1e-8)
+    output_std = np.maximum(output_std, 1e-8)
+    stats = {}
+    for names, means, stds in ((input_names, input_mean, input_std),
+                              (output_names, output_mean, output_std)):
+        for name, mean, std in zip(names, means, stds):
+            stats[f"{name}_m"] = float(mean)
+            stats[f"{name}_s"] = float(std)
+
+    positive_outputs = ()
+    if domain_key == "heat":
+        physical_pde = HeatPDE(alpha=data["alpha"])
+        residual_scales = [output_std[0] / input_std[1]]
+    elif domain_key == "wave":
+        physical_pde = WavePDE(c=data["c"])
+        residual_scales = [output_std[0] / input_std[1] ** 2]
+    elif domain_key == "gravity":
+        physical_pde = GravityPDE(GM=data["GM"])
+        residual_scales = output_std / input_std[0] ** 2
+    elif domain_key == "elasticity":
+        physical_pde = ElasticityPDE(EI=data["EI"], q0=data["q0"],
+                                     load_type=data["load_type"], L=data["L"])
+        residual_scales = [max(abs(data["q0"]),
+                               data["EI"] * output_std[0] / input_std[0] ** 4, 1e-8)]
+    else:
+        cfg = data["cfg"]
+        if domain_key == "inverse_fluids":
+            physical_pde = InverseFluidsPDE(S0=cfg["S0"],
+                                             x_mean=input_mean[0], x_std=input_std[0])
+        else:
+            physical_pde = FluidsPDE(S0=cfg["S0"], n_manning=cfg["n_manning"])
+        positive_outputs = (0,)
+        # The inverse model must not receive the reference roughness through
+        # loss scaling; use a fixed nominal value for conditioning instead.
+        n_reference = cfg["n_manning"] if domain_key == "fluids" else 0.03
+        h_ref = max(abs(output_mean[0]), output_std[0], 1e-8)
+        u_ref = max(abs(output_mean[1]), output_std[1])
+        q_scale = h_ref * output_std[1] + u_ref * output_std[0]
+        continuity_scale = output_std[0] / input_std[1] + q_scale / input_std[0]
+        momentum_scale = (q_scale / input_std[1]
+                          + (2 * u_ref * q_scale + 9.81 * h_ref * output_std[0]) / input_std[0]
+                          + 9.81 * h_ref * (abs(cfg["S0"])
+                                            + n_reference ** 2 * u_ref ** 2 / h_ref ** (4 / 3)))
+        residual_scales = [max(continuity_scale, 1e-8), max(momentum_scale, 1e-8)]
+
+    pde = NormalizedPDE(physical_pde, input_mean, input_std, output_mean,
+                        output_std, positive_outputs=positive_outputs,
+                        residual_scales=residual_scales)
+    normalized_coords = (coordinates - input_mean) / input_std
+    colloc_ranges = [(float(column.min()), float(column.max()))
+                     for column in normalized_coords.T]
+    return (pde, torch.tensor(normalized_coords, dtype=torch.float32),
+            torch.tensor((targets - output_mean) / output_std, dtype=torch.float32),
+            stats, colloc_ranges)
+
+
 def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
                  lambda_pde=0.1, hidden=64, depth=4, seed=0, callback=None,
                  n_colloc=3000):
@@ -184,6 +269,13 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
     Returns: model, history, stats (normalisation), extra (predictions etc.)
     """
     rng = np.random.RandomState(seed)
+    torch.manual_seed(seed)
+    if not 0 < fraction <= 1:
+        raise ValueError("Data fraction must be greater than zero and at most one.")
+    if n_epochs < 1:
+        raise ValueError("Training requires at least one epoch.")
+    if domain_key != "dam":
+        pde, full_coords, full_targets, normalized_stats, colloc_ranges = prepare_domain_training_data(domain_key, data)
 
     if domain_key == "fluids":
         cfg = data["cfg"]
@@ -205,21 +297,19 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
             dtype=torch.float32)
 
         # Dual-head architecture (Wang et al. 2021 adaptive lambda).
-        # Warmup = 40% of epochs data-only so h can converge before physics
-        # is introduced. Physics constraint helps physical consistency and
-        # extrapolation but slightly reduces interpolation R2 for h -- this
-        # is a documented, honest tradeoff reported in the results panel.
-        warmup = max(100, int(n_epochs * 0.40))
+        # Keep a data-only warmup while ensuring even short runs reach the
+        # physics phase. The selected weight initializes adaptive balancing.
+        warmup = int(n_epochs * 0.40)
         model = DualHeadFluidsPINN(
             hidden=max(hidden, 128), depth=max(depth, 5),
-            S0=cfg["S0"], n_manning=cfg["n_manning"]
+            S0=cfg["S0"], n_manning=cfg["n_manning"], pde_module=pde,
         )
         model, hist = train_pinn_adaptive(
             model, coords, targets,
             n_epochs=n_epochs, lr=lr,
             n_colloc=n_colloc, warmup_epochs=warmup,
             alpha_ema=0.9, grad_norm_every=20,
-            callback=callback
+            callback=callback, colloc_ranges=colloc_ranges, lambda_init=lambda_pde,
         )
 
         coords_full = torch.tensor(np.stack([
@@ -232,8 +322,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
         r2_h = r2_score(data["H"], h_pred)
         r2_u = r2_score(data["U"], u_pred)
 
-        # Also report what data-only ceiling is, so the UI can show the
-        # physics tradeoff honestly rather than just one R2 number.
+        # Report the final adaptive weight alongside reconstruction metrics.
         lams = hist.get("lambda_adaptive", [0])
         extra = dict(
             h_pred=h_pred.reshape(data["grid_shape"]),
@@ -246,7 +335,6 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
                                   h_m=h_m,h_s=h_s,u_m=u_m,u_s=u_s), extra
 
     if domain_key == "heat":
-        pde = HeatPDE(alpha=data["alpha"])
         model = PINNEngine(pde, hidden=hidden, depth=depth)
 
         N = len(data["X"])
@@ -254,7 +342,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
         idx = rng.choice(N, n_train, replace=False)
         x_m, x_s = data["X"].mean(), data["X"].std()
         t_m, t_s = data["Tt"].mean(), data["Tt"].std()
-        y_m, y_s = data["Y"].mean(), data["Y"].std() + 1e-8
+        y_m, y_s = normalized_stats["y_m"], normalized_stats["y_s"]
 
         coords = torch.tensor(np.stack([
             (data["X"][idx]-x_m)/x_s, (data["Tt"][idx]-t_m)/t_s], axis=1),
@@ -263,7 +351,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
 
         model, hist = train_pinn(model, coords, targets, n_epochs=n_epochs,
                                  lr=lr, lambda_pde=lambda_pde, n_colloc=n_colloc,
-                                 callback=callback)
+                                 callback=callback, colloc_ranges=colloc_ranges)
 
         coords_full = torch.tensor(np.stack([
             (data["X"]-x_m)/x_s, (data["Tt"]-t_m)/t_s], axis=1), dtype=torch.float32)
@@ -276,7 +364,6 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
                dict(T_pred=T_pred, r2=r2, n_train=n_train)
 
     if domain_key == "wave":
-        pde = WavePDE(c=data["c"])
         model = PINNEngine(pde, hidden=hidden, depth=depth)
 
         N = len(data["X"])
@@ -284,7 +371,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
         idx = rng.choice(N, n_train, replace=False)
         x_m, x_s = data["X"].mean(), data["X"].std()
         t_m, t_s = data["Tt"].mean(), data["Tt"].std()
-        y_m, y_s = data["Y"].mean(), data["Y"].std() + 1e-8
+        y_m, y_s = normalized_stats["y_m"], normalized_stats["y_s"]
 
         coords = torch.tensor(np.stack([
             (data["X"][idx]-x_m)/x_s, (data["Tt"][idx]-t_m)/t_s], axis=1),
@@ -293,7 +380,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
 
         model, hist = train_pinn(model, coords, targets, n_epochs=n_epochs,
                                  lr=lr, lambda_pde=lambda_pde, n_colloc=n_colloc,
-                                 callback=callback)
+                                 callback=callback, colloc_ranges=colloc_ranges)
 
         coords_full = torch.tensor(np.stack([
             (data["X"]-x_m)/x_s, (data["Tt"]-t_m)/t_s], axis=1), dtype=torch.float32)
@@ -306,7 +393,6 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
                dict(U_pred=U_pred, r2=r2, n_train=n_train)
 
     if domain_key == "gravity":
-        pde = GravityPDE(GM=data["GM"])
         model = PINNEngine(pde, hidden=hidden, depth=depth)
 
         N = len(data["t"])
@@ -322,7 +408,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
 
         model, hist = train_pinn(model, coords, targets, n_epochs=n_epochs,
                                  lr=lr, lambda_pde=lambda_pde,
-                                 n_colloc=n_colloc, colloc_ranges=[(-2,2)],
+                                 n_colloc=n_colloc, colloc_ranges=colloc_ranges,
                                  callback=callback)
 
         coords_full = torch.tensor(((data["t"]-t_m)/t_s).reshape(-1,1), dtype=torch.float32)
@@ -337,21 +423,20 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
                dict(x_pred=x_pred, y_pred=y_pred, r2x=r2x, r2y=r2y, n_train=n_train)
 
     if domain_key == "elasticity":
-        pde = ElasticityPDE(EI=data["EI"], q0=data["q0"], load_type=data["load_type"])
         model = PINNEngine(pde, hidden=hidden, depth=depth)
 
         N = len(data["x"])
-        n_train = max(8, int(N * fraction))
+        n_train = min(N, max(1, int(N * fraction)))
         idx = rng.choice(N, n_train, replace=False)
         x_m, x_s = data["x"].mean(), data["x"].std()
-        v_m, v_s = data["v"].mean(), data["v"].std() + 1e-8
+        v_m, v_s = normalized_stats["v_m"], normalized_stats["v_s"]
 
         coords = torch.tensor(((data["x"][idx]-x_m)/x_s).reshape(-1,1), dtype=torch.float32)
         targets = torch.tensor(((data["v"][idx]-v_m)/v_s).reshape(-1,1), dtype=torch.float32)
 
         model, hist = train_pinn(model, coords, targets, n_epochs=n_epochs,
-                                 lr=lr*0.5, lambda_pde=0.01,
-                                 n_colloc=n_colloc, colloc_ranges=[(-2,2)],
+                                 lr=lr*0.5, lambda_pde=lambda_pde,
+                                 n_colloc=n_colloc, colloc_ranges=colloc_ranges,
                                  callback=callback)
 
         coords_full = torch.tensor(((data["x"]-x_m)/x_s).reshape(-1,1), dtype=torch.float32)
@@ -366,7 +451,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
     if domain_key == "dam":
         model, hist = train_dam_system(data, n_epochs=n_epochs, lr=lr,
                            lambda_pde=lambda_pde, n_colloc=n_colloc,
-                           callback=callback)
+                           callback=callback, fraction=fraction, seed=seed)
 
         t_res = data["t_res"]
         t_norm = (t_res - t_res.mean()) / t_res.std()
@@ -375,16 +460,16 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
         with torch.no_grad():
             Z_pred_raw = model.reservoir_level(t_tensor).numpy().ravel()
         Z_true = data["Z"]
-        Z_pred = ((Z_pred_raw - Z_pred_raw.mean())/(Z_pred_raw.std()+1e-8)
-                 * Z_true.std() + Z_true.mean())
+        Z_pred = Z_pred_raw
         r2_z = r2_score(Z_true, Z_pred)
 
         return model, hist, dict(), dict(Z_pred=Z_pred, r2_z=r2_z,
-                                         n_train=len(t_res))
+                                         n_train=model.n_res_train + model.n_reach_train,
+                                         n_res_train=model.n_res_train,
+                                         n_reach_train=model.n_reach_train)
 
     if domain_key == "inverse_fluids":
         cfg = data["cfg"]
-        pde = InverseFluidsPDE(S0=cfg["S0"])
         model = PINNEngine(pde, hidden=hidden, depth=depth)
 
         N = len(data["X"])
@@ -403,7 +488,7 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
             dtype=torch.float32)
 
         def n_tracker():
-            x_eval = torch.linspace(-1, 1, 100).unsqueeze(1)
+            x_eval = torch.linspace(*colloc_ranges[0], 200).unsqueeze(1)
             with torch.no_grad():
                 return pde.get_n(x_eval).mean().item()
 
@@ -412,11 +497,11 @@ def train_domain(domain_key, data, fraction=0.15, n_epochs=1500, lr=1e-3,
             extra_params=pde.n_net.parameters(),
             extra_penalty_fn=pde.smoothness_penalty,
             n_epochs=n_epochs, lr=lr, lambda_pde=lambda_pde, lambda_extra=0.005,
-            n_colloc=n_colloc,
+            n_colloc=n_colloc, colloc_ranges=colloc_ranges,
             history_extra_key="n_inferred", history_extra_fn=n_tracker,
             callback=callback)
 
-        x_eval = torch.linspace(-1, 1, 200).unsqueeze(1)
+        x_eval = torch.linspace(*colloc_ranges[0], 200).unsqueeze(1)
         model.eval()
         with torch.no_grad():
             n_field = pde.get_n(x_eval).numpy().ravel()
@@ -585,6 +670,9 @@ def make_dam_loss_curve_fig(history):
                              mode="lines", name="Reach data", line=dict(color="#1D9E75", width=1.5, dash="dashdot")))
     fig.add_trace(go.Scatter(x=history["epoch"], y=history["loss_pde"],
                              mode="lines", name="Reach physics", line=dict(color="#D85A30", width=1.5, dash="dot")))
+    if "loss_coupling" in history:
+        fig.add_trace(go.Scatter(x=history["epoch"], y=history["loss_coupling"],
+                                 mode="lines", name="Gate coupling", line=dict(color="#7B2D8B", width=1.5)))
     fig.update_layout(
         yaxis_type="log", height=280,
         margin=dict(l=10, r=10, t=10, b=10),

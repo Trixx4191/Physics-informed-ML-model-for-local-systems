@@ -2,8 +2,10 @@
   --lab-ink: #24343c;
   --lab-muted: #61717a;
   --lab-line: #dde4e7;
-  --lab-accent: #216b80;
-  --Dash-Fill-Interactive-Strong: #216b80;
+  --lab-accent: #080808;
+  --Dash-Fill-Interactive-Strong: #080808;
+  --Dash-Fill-Interactive-Weak: #efefec;
+  --Dash-Fill-Primary-Active: #080808;
 }
 
 body {
@@ -23,6 +25,10 @@ body {
 }
 .workspace-header h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .workspace-header span { color: var(--lab-muted); font-size: 11px; }
+.workspace-home { margin-left: auto; font-size: 11px; color: var(--lab-muted); text-decoration: none; }
+.workspace-home:hover { color: var(--lab-accent); }
+.run-context, .experiment-status { color: var(--lab-muted); font-size: 11px; margin: 6px 0 10px; }
+.run-context:empty, .experiment-status:empty { display: none; }
 
 /* One horizontal instrument rail. Overflow stays within the inputs so the
    action and live feedback remain visible at every viewport width. */
@@ -82,8 +88,10 @@ body {
   border-color: var(--lab-accent);
   box-shadow: none;
 }
+.control-field .Select-option.is-focused { background: #f1f1ee; color: #080808; }
+.control-field .Select-option.is-selected { background: #e7e7e3; color: #080808; }
 .control-field .rc-slider { padding: 7px 0; margin: 5px 8px 0; width: calc(100% - 16px); }
-.control-field .rc-slider-rail { background: #e3e9ec; height: 3px; }
+.control-field .rc-slider-rail { background: #e5e5e1; height: 3px; }
 .control-field .rc-slider-track { background: var(--lab-accent); height: 3px; }
 .control-field .rc-slider-handle {
   width: 11px;
@@ -93,14 +101,22 @@ body {
   background: #fff;
   box-shadow: none;
 }
-.control-field .rc-slider-dot { width: 4px; height: 4px; bottom: 1px; border: 0; background: #bccbd0; }
+.control-field .rc-slider-handle:hover,
+.control-field .rc-slider-handle:focus,
+.control-field .rc-slider-handle:active,
+.control-field .rc-slider-handle.rc-slider-handle-dragging {
+  border-color: var(--lab-accent);
+  box-shadow: none;
+}
+.control-field .rc-slider-dot { width: 4px; height: 4px; bottom: 1px; border: 0; background: #bcbcb7; }
+.control-field .rc-slider-dot-active { background: var(--lab-accent); }
 .control-field .rc-slider-mark-text { font-size: 10px; color: var(--lab-muted); white-space: nowrap; }
 /* Dash 4 controls use these classes; keep the selectors above for Dash 2/3. */
 .control-field .dash-dropdown { border-radius: 2px; border-color: #cbd6db; }
 .control-field .dash-dropdown-trigger { min-height: 31px; padding: 0 8px; }
 .dash-dropdown-content { box-shadow: none !important; border-radius: 2px !important; font-size: 12px; }
 .control-field .dash-slider-root { margin: 5px 8px 0; width: calc(100% - 16px); }
-.control-field .dash-slider-track { height: 3px; background: #e3e9ec; }
+.control-field .dash-slider-track { height: 3px; background: #e5e5e1; }
 .control-field .dash-slider-range { background: var(--lab-accent); }
 .control-field .dash-slider-thumb {
   width: 11px;
@@ -110,16 +126,56 @@ body {
   box-shadow: none;
 }
 .control-field .dash-slider-thumb:hover, .control-field .dash-slider-thumb:focus { box-shadow: none; }
+.control-field .dash-slider-dot { background: var(--lab-accent); }
+.control-field .dash-slider-dot-outside-selection { background: #bcbcb7; }
 .control-field .dash-slider-mark { font-size: 10px; color: var(--lab-muted); }
 .control-field .dash-slider-tooltip { padding: 4px 6px; box-shadow: none; border: 1px solid var(--lab-line); font-size: 11px; }
 .training-actions { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
 .training-status { width: 140px; color: var(--lab-muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 #train-progress:not(:empty) { color: var(--lab-accent); font-variant-numeric: tabular-nums; }
 .laboratory-workspace .btn { border-radius: 2px; box-shadow: none; font-size: 12px; padding: 7px 12px; white-space: nowrap; }
-.laboratory-workspace .btn-primary { background: var(--lab-accent); border-color: var(--lab-accent); }
-.laboratory-workspace .btn-primary:hover { background: #18566a; border-color: #18566a; }
-.laboratory-workspace .btn-outline-secondary { color: var(--lab-ink); border-color: #bdcbd1; }
-.laboratory-workspace .btn-outline-secondary:hover { background: #f2f6f7; }
+.laboratory-workspace .btn-primary {
+  --bs-btn-color: #f2f2ef;
+  --bs-btn-bg: #080808;
+  --bs-btn-border-color: #080808;
+  --bs-btn-hover-color: #f2f2ef;
+  --bs-btn-hover-bg: #242424;
+  --bs-btn-hover-border-color: #242424;
+  --bs-btn-active-color: #f2f2ef;
+  --bs-btn-active-bg: #161616;
+  --bs-btn-active-border-color: #161616;
+  --bs-btn-disabled-color: #f2f2ef;
+  --bs-btn-disabled-bg: #080808;
+  --bs-btn-disabled-border-color: #080808;
+  --bs-btn-focus-shadow-rgb: 96, 96, 96;
+  color: #f2f2ef;
+  background: var(--lab-accent);
+  border-color: var(--lab-accent);
+}
+.laboratory-workspace .btn-primary:hover,
+.laboratory-workspace .btn-primary:focus-visible { background: #242424; border-color: #242424; }
+.laboratory-workspace .btn-primary:active { background: #161616; border-color: #161616; }
+.laboratory-workspace .btn-primary:disabled { background: #080808; border-color: #080808; }
+.laboratory-workspace .btn-outline-secondary {
+  --bs-btn-color: #242424;
+  --bs-btn-border-color: #888883;
+  --bs-btn-hover-color: #f2f2ef;
+  --bs-btn-hover-bg: #080808;
+  --bs-btn-hover-border-color: #080808;
+  --bs-btn-active-color: #f2f2ef;
+  --bs-btn-active-bg: #161616;
+  --bs-btn-active-border-color: #161616;
+  --bs-btn-disabled-color: #777773;
+  --bs-btn-disabled-bg: transparent;
+  --bs-btn-disabled-border-color: #bcbcb7;
+  --bs-btn-focus-shadow-rgb: 96, 96, 96;
+  color: #242424;
+  border-color: #888883;
+}
+.laboratory-workspace .btn-outline-secondary:hover,
+.laboratory-workspace .btn-outline-secondary:focus-visible { color: #f2f2ef; background: #080808; border-color: #080808; }
+.laboratory-workspace .btn-outline-secondary:active { color: #f2f2ef; background: #161616; border-color: #161616; }
+.laboratory-workspace .btn:focus-visible { outline: 2px solid #777773; outline-offset: 3px; box-shadow: none; }
 
 .equation-strip { padding: 10px 24px; border-bottom: 1px solid var(--lab-line); }
 .equation-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; font-size: 12px; }

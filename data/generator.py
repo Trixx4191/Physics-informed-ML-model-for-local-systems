@@ -52,6 +52,7 @@ RIVERS = {
         "reservoir_area": 1e6,  # m²
         "Cd": 0.611,
         "gate_width": 10.0,
+        "channel_width": 30.0,  # downstream rectangular channel width (m)
     },
     "custom": {
         "name": "Custom River",
@@ -67,11 +68,26 @@ RIVERS = {
 
 
 def solve_saint_venant(river_key="volta", Nx=200, Nt=500, T=86400,
-                       n_override=None, custom_params=None):
+                       n_override=None, custom_params=None,
+                       upstream_discharge=None, channel_width=None):
     """
     Lax-Friedrichs explicit finite difference solver for 1D Saint-Venant.
     Returns arrays: x (Nx,), t (Nt,), h (Nt,Nx), u (Nt,Nx)
+
+    Optional upstream_discharge is Q(t) in m³/s, supplied as a callable or
+    (times, flows) pair. channel_width converts it to unit-width discharge
+    h*u. Without it, the original sinusoidal upstream boundary is used.
+    Nt is refined automatically until the computed flow satisfies CFL <= 0.9.
     """
+    return _solve_saint_venant_checked(
+        river_key, Nx, Nt, T, n_override, custom_params,
+        upstream_discharge, channel_width, refinement=0)
+
+
+def _solve_saint_venant_checked(river_key, Nx, Nt, T, n_override,
+                               custom_params, upstream_discharge,
+                               channel_width, refinement):
+    """Integrate, check the observed wave speeds, and refine if necessary."""
     cfg = RIVERS[river_key].copy()
     if custom_params:
         cfg.update(custom_params)
@@ -87,18 +103,36 @@ def solve_saint_venant(river_key="volta", Nx=200, Nt=500, T=86400,
     period = cfg["flood_period"]
     g = 9.81
 
-    dx = L / Nx
-    dt = T / Nt
+    if Nx < 3 or Nt < 2 or T <= 0:
+        raise ValueError("The solver needs Nx >= 3, Nt >= 2, and T > 0.")
+    inlet_flow = None
+    if upstream_discharge is not None:
+        channel_width = channel_width if channel_width is not None else cfg.get("channel_width")
+        if channel_width is None or channel_width <= 0:
+            raise ValueError("A positive channel width is required for volumetric inflow.")
+        if callable(upstream_discharge):
+            inlet_flow = upstream_discharge
+        else:
+            inlet_times, inlet_values = upstream_discharge
+            inlet_flow = lambda time: np.interp(time, inlet_times, inlet_values)
+        cfg["channel_width"] = channel_width
+
+    dx = L / (Nx - 1)
+    dt = T / (Nt - 1)
     x = np.linspace(0, L, Nx)
     t = np.linspace(0, T, Nt)
 
-    # CFL check
-    c_max = np.sqrt(g * (h0 + amp)) + (u0 + 0.5)
+    # Include the full supported interior velocity range, rather than only
+    # the initial velocity: steep slopes can accelerate flow substantially.
+    c_max = np.sqrt(g * (h0 + abs(amp))) + max(8.0, abs(u0) + 0.3)
+    if inlet_flow is not None:
+        max_inlet_u = max(abs(float(inlet_flow(time))) for time in t) / (channel_width * h0)
+        c_max = max(c_max, np.sqrt(g * (h0 + abs(amp))) + max_inlet_u)
     cfl = c_max * dt / dx
     if cfl > 0.9:
         # auto-adjust Nt to satisfy CFL
-        Nt = int(T * c_max / (0.8 * dx)) + 1
-        dt = T / Nt
+        Nt = int(np.ceil(T * c_max / (0.8 * dx))) + 1
+        dt = T / (Nt - 1)
         t = np.linspace(0, T, Nt)
 
     # Initial conditions — uniform flow
@@ -106,6 +140,8 @@ def solve_saint_venant(river_key="volta", Nx=200, Nt=500, T=86400,
     u = np.full((Nt, Nx), u0)
     h[0] = h0
     u[0] = u0
+    if inlet_flow is not None:
+        u[0, 0] = float(inlet_flow(t[0])) / (channel_width * h0)
 
     def friction(h_arr, u_arr):
         return g * n**2 * u_arr * np.abs(u_arr) / (h_arr**(4/3) + 1e-8)
@@ -116,8 +152,12 @@ def solve_saint_venant(river_key="volta", Nx=200, Nt=500, T=86400,
         qk = hk * uk
 
         # Upstream boundary: sinusoidal flood wave
-        h_upstream = h0 + amp * np.sin(2 * np.pi * t[k] / period) * max(0, np.sin(np.pi * t[k] / T))
-        u_upstream = u0 + 0.3 * np.sin(2 * np.pi * t[k] / period)
+        if inlet_flow is None:
+            h_upstream = h0 + amp * np.sin(2 * np.pi * t[k+1] / period) * max(0, np.sin(np.pi * t[k+1] / T))
+            u_upstream = u0 + 0.3 * np.sin(2 * np.pi * t[k+1] / period)
+        else:
+            h_upstream = max(hk[1], 0.05)
+            u_upstream = float(inlet_flow(t[k+1])) / (channel_width * h_upstream)
 
         # Lax-Friedrichs for continuity: h_{k+1,i} = 0.5(h_{i+1}+h_{i-1}) - dt/(2dx)*(q_{i+1}-q_{i-1})
         h_new = np.zeros(Nx)
@@ -140,9 +180,9 @@ def solve_saint_venant(river_key="volta", Nx=200, Nt=500, T=86400,
             # multiples of the discharge itself and flips sign every step —
             # an oscillating blowup, not a genuine flood wave. The standard
             # fix is a semi-implicit friction update: solve
-            #   u_new = (q_lf/h_new) / (1 + dt*g*n^2*|u_old|/h_new^(7/3))
+            #   u_new = (q_lf/h_new) / (1 + dt*g*n^2*|u_old|/h_new^(4/3))
             # which damps toward equilibrium instead of overshooting it.
-            denom = 1.0 + dt * g * (n**2) * abs(uk[i]) / (h_new[i]**(7.0/3.0) + 1e-8)
+            denom = 1.0 + dt * g * (n**2) * abs(uk[i]) / (h_new[i]**(4.0/3.0) + 1e-8)
             u_new[i] = (q_lf / (h_new[i] + 1e-8)) / denom
             # physical velocity cap as a final safety net, not the primary
             # stabiliser (the semi-implicit step above should rarely hit it)
@@ -156,6 +196,21 @@ def solve_saint_venant(river_key="volta", Nx=200, Nt=500, T=86400,
 
         h[k+1] = h_new
         u[k+1] = u_new
+
+    if not np.isfinite(h).all() or not np.isfinite(u).all():
+        raise FloatingPointError("Saint-Venant solver produced non-finite flow values.")
+    observed_speed = float(np.max(np.abs(u) + np.sqrt(g * h)))
+    if observed_speed * dt / dx > 0.9:
+        # Boundary velocities and evolving depths can exceed the initial
+        # estimate. Verify the actual solution instead of relying on clipping
+        # to hide an excessive Courant number. Bound retries for invalid or
+        # unusually demanding configurations outside the supported UI range.
+        if refinement >= 8:
+            raise RuntimeError("Saint-Venant solver could not satisfy CFL <= 0.9 after refinement.")
+        refined_nt = max(Nt + 1, int(np.ceil(T * observed_speed / (0.8 * dx))) + 1)
+        return _solve_saint_venant_checked(
+            river_key, Nx, refined_nt, T, n_override, custom_params,
+            upstream_discharge, channel_width, refinement=refinement + 1)
 
     return x, t, h, u, cfg
 
@@ -235,7 +290,7 @@ def generate_dam_data(T=86400, Nt_res=300, Nx=100, Nt_reach=300,
     L = cfg["length"]
 
     t_res = np.linspace(0, T, Nt_res)
-    dt = T / Nt_res
+    dt = T / (Nt_res - 1)
 
     # Variable inflow: base + storm pulse
     Q_in = 50 + 30 * np.sin(2 * np.pi * t_res / (T * 0.4)) * (t_res / T)
@@ -252,7 +307,8 @@ def generate_dam_data(T=86400, Nt_res=300, Nx=100, Nt_reach=300,
 
     # Downstream reach driven by gate outflow as upstream BC
     x_reach, t_reach, h_reach, u_reach, _ = solve_saint_venant(
-        "dam", Nx=Nx, Nt=Nt_reach, T=T)
+        "dam", Nx=Nx, Nt=Nt_reach, T=T, custom_params=cfg,
+        upstream_discharge=(t_res, Q_out_series), channel_width=cfg["channel_width"])
 
     return {
         "t_res": t_res, "Z": Z, "Q_in": Q_in, "Q_out": Q_out_series,

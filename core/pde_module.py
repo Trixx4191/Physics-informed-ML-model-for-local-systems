@@ -103,6 +103,94 @@ class PDEModule(ABC):
         return "Governing equation not specified"
 
 
+class NormalizedPDE(PDEModule):
+    """Evaluate a physical PDE while the network uses standardized variables.
+
+    Autograd differentiates the physical network with respect to physical
+    coordinates, so input and output scaling follows the chain rule even for
+    fourth derivatives and nonlinear terms. Optional residual scales only
+    precondition the loss; they do not change the equation's zero set.
+
+    ``positive_outputs`` identifies physical fields constrained above zero.
+    Their standardized values may be negative: positive depth is not the same
+    as a positive standardized depth. Other outputs are unconstrained, as in
+    the current heat, wave, orbit, and beam domains.
+    """
+    def __init__(self, physical_pde, input_mean, input_std, output_mean,
+                 output_std, positive_outputs=(), residual_scales=None):
+        self.physical_pde = physical_pde
+        self.input_mean = np.asarray(input_mean, dtype=float)
+        self.input_std = np.asarray(input_std, dtype=float)
+        self.output_mean = np.asarray(output_mean, dtype=float)
+        self.output_std = np.asarray(output_std, dtype=float)
+        self.positive_outputs = tuple(positive_outputs)
+        self.residual_scales = residual_scales
+        if np.any(self.input_std <= 0) or np.any(self.output_std <= 0):
+            raise ValueError("Normalization scales must be positive.")
+
+    @property
+    def name(self):
+        return self.physical_pde.name
+
+    @property
+    def input_dim(self):
+        return self.physical_pde.input_dim
+
+    @property
+    def output_dim(self):
+        return self.physical_pde.output_dim
+
+    @property
+    def output_names(self):
+        return self.physical_pde.output_names
+
+    def __getattr__(self, name):
+        # Keep auxiliary inverse-problem APIs (n_net, get_n, etc.) available.
+        physical_pde = self.__dict__.get("physical_pde")
+        if physical_pde is None:
+            raise AttributeError(name)
+        return getattr(physical_pde, name)
+
+    def transform_output(self, raw_output):
+        columns = []
+        for index in range(self.output_dim):
+            value = raw_output[:, index:index + 1]
+            if index in self.positive_outputs:
+                offset = self.output_mean[index] / self.output_std[index]
+                value = torch.nn.functional.softplus(value + offset) - offset
+            columns.append(value)
+        return torch.cat(columns, dim=1)
+
+    def to_physical_output(self, output):
+        physical = (output * output.new_tensor(self.output_std)
+                    + output.new_tensor(self.output_mean))
+        # Standardized values close to the lower bound can round slightly
+        # below zero when rescaled in float32. Keep friction powers finite.
+        return torch.cat([physical[:, index:index + 1].clamp_min(1e-8)
+                          if index in self.positive_outputs else physical[:, index:index + 1]
+                          for index in range(self.output_dim)], dim=1)
+
+    def residual(self, coords, net_fn):
+        input_mean = coords.new_tensor(self.input_mean)
+        input_std = coords.new_tensor(self.input_std)
+        physical_coords = coords * input_std + input_mean
+
+        def physical_net(physical_inputs):
+            normalized_inputs = (physical_inputs - input_mean) / input_std
+            return self.to_physical_output(net_fn(normalized_inputs))
+
+        residuals = self.physical_pde.residual(physical_coords, physical_net)
+        if self.residual_scales is None:
+            return residuals
+        if isinstance(residuals, (tuple, list)):
+            return tuple(residual / scale for residual, scale
+                         in zip(residuals, self.residual_scales))
+        return residuals / self.residual_scales[0]
+
+    def describe_equation(self):
+        return self.physical_pde.describe_equation()
+
+
 class PINNEngine(nn.Module):
     """
     The general PINN wrapper. Takes any PDEModule and builds a trainable
@@ -265,7 +353,7 @@ def train_pinn(model: PINNEngine, data_coords, data_targets,
         optimizer.step()
         scheduler.step()
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 or epoch == n_epochs - 1:
             history["epoch"].append(epoch)
             history["loss_total"].append(loss.item())
             history["loss_data"].append(loss_data.item())
@@ -281,7 +369,7 @@ def train_pinn_adaptive(model, data_coords, data_targets,
                         n_colloc=3000, colloc_ranges=None,
                         alpha_ema=0.9, warmup_epochs=200,
                         grad_norm_every=20,
-                        callback=None):
+                        callback=None, lambda_init=0.1):
     """
     Adaptive loss-balanced PINN trainer — Wang, Teng & Perdikaris (2021),
     "Understanding and mitigating gradient pathologies in physics-informed
@@ -305,7 +393,7 @@ def train_pinn_adaptive(model, data_coords, data_targets,
         "loss_pde": [], "lambda_adaptive": []
     }
 
-    lam_ema = 0.1
+    lam_ema = lambda_init
 
     for epoch in range(n_epochs):
         model.train()
@@ -351,7 +439,7 @@ def train_pinn_adaptive(model, data_coords, data_targets,
         optimizer.step()
         scheduler.step()
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 or epoch == n_epochs - 1:
             history["epoch"].append(epoch)
             history["loss_total"].append(loss.item())
             history["loss_data"].append(loss_data.item())
@@ -417,7 +505,7 @@ def train_pinn_with_extra_params(model: PINNEngine, data_coords, data_targets,
         optimizer.step()
         scheduler.step()
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 or epoch == n_epochs - 1:
             history["epoch"].append(epoch)
             history["loss_total"].append(loss.item())
             history["loss_data"].append(loss_data.item())

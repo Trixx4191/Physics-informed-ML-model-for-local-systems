@@ -182,7 +182,7 @@ def test_training_and_experiments_are_registered_as_background_jobs(ui):
     experiments = next(cb for cb in ui.app.callback_map.values() if "sparsity-btn" in str(cb["inputs"]))
     assert experiments["background"] is not None
     specs = {cb["output"]: cb for cb in ui.app._callback_list}
-    training_spec = next(cb for key, cb in specs.items() if "results-area.children" in key and "train-status" in key)
+    training_spec = next(cb for key, cb in specs.items() if "results-area.children" in key and "train-status" in key and any(i["id"] == "train-btn" for i in cb["inputs"]))
     assert training_spec["running"]["running"] == {"train-btn.disabled": True}
     assert training_spec["running"]["runningOff"] == {"train-btn.disabled": False}
     experiment_spec = next(cb for key, cb in specs.items() if key == "experiment-results-area.children")
@@ -204,9 +204,9 @@ DOMAIN_EXPECTATIONS = {
     "elasticity": (2, {"make_beam_3d": 1, "make_loss_curve_fig": 1},
                    ["R²", "Training pts", "Load type", "EI", "Beam L", "q0"]),
     "dam": (4, {"make_dam_reservoir_fig": 1, "make_dam_reach_surface": 1, "make_dam_loss_curve_fig": 1},
-            ["Reservoir level R²", "Time steps", "Reservoir area", "Downstream reach"]),
+            ["Reservoir level R²", "Training pts", "Reservoir area", "Downstream reach"]),
     "inverse_fluids": (2, {"make_n_field_fig": 1, "make_loss_curve_fig": 1},
-                       ["True n", "Inferred n", "Relative error", "Training pts", "roughness inference accuracy"]),
+                       ["True n", "Inferred n", "Relative error", "Training pts", "roughness inference depends"]),
 }
 
 
@@ -334,7 +334,7 @@ def test_sparsity_sweep_retains_comparison_error_bars_and_results_table(ui, monk
     def sweep(*_args, **kwargs):
         recorded.append(kwargs)
         return {
-            "fractions": kwargs["fractions"], "pinn_r2": [0.8, 0.9], "mlp_r2": [0.6, 0.85],
+            "fractions": kwargs["fractions"], "pinn_r2": [0.5, 0.9], "mlp_r2": [0.6, 0.85],
             "pinn_r2_std": [0.02, 0.01], "mlp_r2_std": [0.03, 0.02],
             "pinn_rmse": [0.2, 0.1], "mlp_rmse": [0.4, 0.15],
         }
@@ -357,6 +357,9 @@ def test_sparsity_sweep_retains_comparison_error_bars_and_results_table(ui, monk
     assert len(rmse_graph.figure.data) == 2
     assert "Results table" in text_content(content)
     assert "PINN R²" in text_content(content) and "MLP R²" in text_content(content)
+    assert "Higher mean PINN R² at tested fractions: 50%" in text_content(content)
+    assert "and below" not in text_content(content)
+    assert "not held-out" in text_content(content)
 
 
 @pytest.mark.parametrize("domain", ["heat", "gravity"])
@@ -368,28 +371,116 @@ def test_mc_dropout_retains_field_or_band_uncertainty_and_loss(ui, monkeypatch, 
             prediction_samples.append(n_samples)
             return np.zeros((len(coords), 2)), np.full((len(coords), 2), 0.1)
 
-    def train(*_args, **kwargs):
-        training_options.append(kwargs)
+    def train(_pde, coords, targets, **kwargs):
+        training_options.append({**kwargs, "n_train": len(coords)})
+        assert len(coords) == len(targets)
         return MCModel(), HISTORY
 
     monkeypatch.setattr(ui, "train_mc_dropout", train)
     token = context_value.set(AttributeDict(triggered_inputs=[{"prop_id": "mcdrop-btn.n_clicks", "value": 1}]))
     try:
-        content = ui.run_experiment(0, 1, domain, [0.1], 2, 400, 0.12, 150, "volta", 0.035, 0.0008)
+        content = ui.run_experiment(0, 1, domain, [0.1], 2, 400, 0.12, 150, "volta", 0.035, 0.0008,
+                                    fraction_pct=30, lambda_pde=0.42)
     finally:
         context_value.reset(token)
     assert training_options[0]["dropout_p"] == 0.12
     assert training_options[0]["n_epochs"] == 400
+    assert training_options[0]["lambda_pde"] == 0.42
+    assert training_options[0]["n_train"] == (750 if domain == "heat" else 90)
     assert prediction_samples == [150]
     uncertainty, distribution, loss = graphs(content)
     if domain == "heat":
         assert uncertainty.figure.data[0].type == "surface"
     else:
-        assert {trace.name for trace in uncertainty.figure.data} == {"True", "MC mean", "95% CI", "68% CI"}
+        assert {trace.name for trace in uncertainty.figure.data} == {"True", "MC mean", "±2σ dropout spread", "±1σ dropout spread"}
     assert distribution.figure.data[0].type == "histogram"
+    assert np.allclose(distribution.figure.data[0].x, 0.4)
     assert {trace.name for trace in loss.figure.data} == {"Total", "Data", "Physics"}
-    for label in ("MC mean R²", "Mean 95% CI width", "MC samples", "Dropout p", "150", "0.12"):
+    for label in ("MC mean R²", "Mean ±2σ width", "MC samples", "Dropout p", "150", "0.12"):
         assert label in text_content(content)
+    assert "0.4000" in text_content(content)
+
+
+def test_home_and_workspace_routes_preserve_the_mounted_dashboard(ui):
+    ids = by_id(ui.app.layout)
+    assert {"landing-page", "workspace-page", "page-location", "workspace-id", "run-recovery"} <= ids.keys()
+    assert "results-area" in by_id(ids["workspace-page"])
+    assert "experiment-results-area" in by_id(ids["workspace-page"])
+    links = [part for part in walk(ids["landing-page"]) if isinstance(part, dcc.Link)]
+    assert links and all(link.href == "/workspace" and link.refresh is False for link in links)
+    assert ui.show_page("/") == ({"display": "block"}, {"display": "none"}, True)
+    assert ui.show_page("/workspace") == ({"display": "none"}, {"display": "block"}, False)
+
+
+def test_workspace_controls_restore_values_including_zero_eccentricity(ui):
+    ids = by_id(ui.app.layout)
+    assert ids["workspace-id"].storage_type == "session"
+    assert ids["workspace-tabs"].persistence_type == "session"
+    for param in ui.PARAM_DEFAULTS:
+        assert ids[f"{param}-store"].storage_type == "session"
+    for control in ("domain-select", "data-fraction", "epochs", "lambda-pde",
+                    "sparsity-fractions", "sparsity-seeds", "dropout-p", "mc-samples"):
+        assert ids[control].persistence and ids[control].persistence_type == "session"
+    values = {**ui.PARAM_DEFAULTS, "param-e": 0.0, "param-GM": 3.0}
+    controls = by_id(ui.render_domain_params("gravity", *values.values()))
+    assert controls["param-e"].value == 0.0
+    assert controls["param-GM"].value == 3.0
+
+
+def test_recovery_restores_outputs_and_avoids_republishing_unchanged_figures(ui, monkeypatch):
+    saved_result = {"type": "Div", "namespace": "dash_html_components", "props": {"children": "saved heat solution"}}
+    record = dict(id="run-one", updated=1.5, state="completed", domain_key="heat",
+                  inputs={"epochs": 200, "fraction_pct": 25}, result=[saved_result, "Heat trained"])
+    monkeypatch.setattr(ui, "get_run", lambda _cache, kind, _session: record if kind == "training" else None)
+    restored = ui.recover_runs(1, "session", None)
+    assert restored[:2] == (saved_result, "Heat trained")
+    assert restored[5:8] == (False, False, False)
+    assert "Heat diffusion" in restored[9] and "200 epochs" in restored[9]
+    repeated = ui.recover_runs(2, "session", restored[8])
+    assert all(value is ui.dash.no_update for value in (*repeated[:5], repeated[8], repeated[9]))
+
+
+def test_recovery_keeps_an_active_run_guarded_and_reports_interruption(ui, monkeypatch):
+    record = dict(id="run-two", updated=2.5, state="running", domain_key="wave",
+                  inputs={}, result=["old result", "old status"], progress="Training wave: epoch 10 / 200")
+    monkeypatch.setattr(ui, "get_run", lambda _cache, kind, _session: record if kind == "training" else None)
+    restored = ui.recover_runs(1, "session", None)
+    assert restored[0] is ui.dash.no_update
+    assert restored[2] == record["progress"]
+    assert restored[5:8] == (True, True, True)
+    record.update(state="interrupted", result=None)
+    interrupted = ui.recover_runs(2, "session", restored[8])
+    assert "interrupted" in interrupted[1].lower()
+    assert interrupted[5:8] == (False, False, False)
+    record.update(updated=3.5, result=["old heat result", "Heat trained"],
+                  result_domain_key="heat", result_inputs={"epochs": 100, "fraction_pct": 50})
+    retained = ui.recover_runs(3, "session", interrupted[8])
+    assert retained[0] == "old heat result"
+    assert "Heat diffusion" in retained[9] and "100 epochs" in retained[9]
+    assert "Wave propagation" not in retained[9]
+
+
+@pytest.mark.parametrize("domain, settings, expected", [
+    ("heat", {"alpha_val": 0.08}, {"alpha": 0.08}),
+    ("wave", {"c_val": 1.8, "mode_val": 3}, {"c": 1.8, "mode": 3}),
+    ("gravity", {"e_val": 0.0, "GM_val": 2.0}, {"eccentricity": 0.0, "GM": 2.0}),
+    ("elasticity", {"load_val": "point", "EI_val": 2.5, "L_val": 2.0, "q0_val": 3.0},
+     {"load_type": "point", "EI": 2.5, "L": 2.0, "q0": 3.0}),
+])
+def test_experiments_use_the_selected_domain_parameters(ui, monkeypatch, available_slot, domain, settings, expected):
+    received = []
+
+    def capture(key, **params):
+        received.append((key, params))
+        raise ValueError("stop after checking generation parameters")
+
+    monkeypatch.setattr(ui, "generate_domain_data", capture)
+    token = context_value.set(AttributeDict(triggered_inputs=[{"prop_id": "sparsity-btn.n_clicks", "value": 1}]))
+    try:
+        ui.run_experiment(1, 0, domain, [0.1], 1, 100, 0.08, 100, "volta", 0.035, 0.0008, **settings)
+    finally:
+        context_value.reset(token)
+    assert received == [(domain, expected)]
 
 
 def test_dash_layout_dependencies_and_health_are_served(ui):
