@@ -11,3 +11,7 @@ __pycache__/
 .ipynb_checkpoints/
 node_modules/
 results/checkpoints/
+
+# Local-only paper generation scripts
+/paper/**/generate_paper*.py
+/paper/**/build_manuscript.py
